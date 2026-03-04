@@ -37,3 +37,8 @@ externalPort = 80
 deploymentTarget = "autoscale"
 run = ["npm", "run", "start"]
 build = ["npm", "run", "build"]
+
+[userenv]
+
+[userenv.shared]
+BETTER_AUTH_SECRET = "aa9a9252dfdef4eac511882210c2c1382658e86eeb6092b8543a6a815fd1eec6"

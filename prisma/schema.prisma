@@ -13,24 +13,91 @@ datasource db {
 }
 
 // ============================================================
-// 1. 認証・ユーザー管理（Better Auth管理テーブルは別途自動生成）
+// 0. Better Auth 管理テーブル
+// ============================================================
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions      Session[]
+  accounts      AuthAccount[]
+  profile       UserProfile?
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model AuthAccount {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("verification")
+}
+
+// ============================================================
+// 1. ユーザープロファイル（Better Auth拡張）
 // ============================================================
 
 enum UserRole {
-  ADMIN     // 管理者：全機能操作可
-  OPERATOR  // 経費入力者：経費入力のみ、自社のみ閲覧
+  ADMIN
+  OPERATOR
 }
 
-// Better Auth が自動生成する user テーブルを拡張
 model UserProfile {
   id              String    @id @default(cuid())
-  authUserId      String    @unique // Better Auth の user.id への参照
+  authUserId      String    @unique
   role            UserRole  @default(OPERATOR)
   displayName     String
-  assignedCompanyIds String[] // 担当会社IDリスト（Operator用）
+  assignedCompanyIds String[]
   isActive        Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+
+  user            User      @relation(fields: [authUserId], references: [id], onDelete: Cascade)
 
   @@map("user_profiles")
 }
@@ -374,6 +441,7 @@ model Transaction {
   // リンク（会社間取引・資金移動の双方向参照）
   linkedTransactionId String?       // 相手取引ID
   parentId        String?           // 親取引ID（子明細の場合）
+  cashWithdrawalBatchId String?     // 現金引出バッチID
 
   // 証憑
   hasEvidence     Boolean           @default(false)
@@ -391,7 +459,7 @@ model Transaction {
   children        Transaction[]     @relation("TransactionChildren")
   details         TransactionDetail[]
   evidences       Evidence[]
-  cashWithdrawal  CashWithdrawalBatch? @relation("BatchTransactions")
+  cashWithdrawal  CashWithdrawalBatch? @relation("BatchTransactions", fields: [cashWithdrawalBatchId], references: [id])
   fundTransfer    FundTransfer?
 
   @@index([companyId, accountId, accountingMonth])
