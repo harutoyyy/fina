@@ -403,7 +403,7 @@ export default function SalaryPage() {
           <p className="text-muted-foreground">{selectedCompany.name} の給与・賞与を入力・管理します</p>
         </div>
         <div className="flex items-center gap-2">
-          <SalaryExcelImport companyId={selectedCompany.id} onComplete={loadSalaryEntries} />
+          <SalaryExcelImport companyId={selectedCompany.id} onComplete={() => loadEntries(selectedCompany.id)} />
           <Button onClick={openNewForm} disabled={payrollGroups.length === 0}>
             新規給与入力
           </Button>
