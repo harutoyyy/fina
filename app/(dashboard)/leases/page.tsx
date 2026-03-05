@@ -430,7 +430,7 @@ export default function LeasesPage() {
                   onClick={async () => {
                     if (!selectedCompany || !confirm("未払いスケジュールを再生成しますか？")) return
                     await regenerateLeaseSchedule(detailLease.id, selectedCompany.id)
-                    await loadData()
+                    await loadLeases(selectedCompany.id)
                     const updated = leases.find(l => l.id === detailLease.id)
                     if (updated) setDetailLease(updated)
                   }}

@@ -26,8 +26,10 @@ app/
   (dashboard)/master/
     companies/              - Company list & edit
     accounts/               - Bank account management
-    partners/               - Trading partner management
+    banks/                  - Bank/branch master
+    partners/               - Trading partner management (+ bank accounts, sites)
     categories/             - Account category management (3-level)
+    deduction-categories/   - Deduction category master (sales/cost)
     settings/               - System settings (placeholder)
   (dashboard)/cashflow/     - Fund transfer input
   (dashboard)/cashflow-table/ - Cash flow table view
@@ -41,7 +43,7 @@ app/
   (dashboard)/recurring/    - Recurring payment templates
   api/auth/[...all]/        - Better Auth API routes
   api/companies/            - Companies API
-  actions/                  - Server Actions (companies, accounts, partners, categories, transactions, fund-transfers, payroll, cashflow-table, loans, leases, recurring)
+  actions/                  - Server Actions (companies, accounts, partners, categories, transactions, fund-transfers, payroll, cashflow-table, loans, leases, recurring, bank-masters, partner-bank-accounts, partner-sites, deduction-categories, audit-logs)
   layout.tsx                - Root layout
   page.tsx                  - Home (redirects to /dashboard)
   globals.css               - Global styles + shadcn CSS variables
@@ -57,6 +59,8 @@ contexts/
 lib/
   auth.ts                   - Better Auth server config
   auth-client.ts            - Better Auth client (React hooks)
+  audit-log.ts              - Audit logging utility (createAuditLog, getAuditLogs)
+  format.ts                 - Formatting helpers (formatYen, bigintToJson, etc.)
   prisma.ts                 - Prisma client singleton
   utils.ts                  - cn() utility
 middleware.ts               - Auth middleware (redirect to /login if no session)

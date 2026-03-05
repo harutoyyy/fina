@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { requireSession } from "@/lib/auth-server"
 import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
+import { createAuditLog } from "@/lib/audit-log"
 
 async function verifyCompanyAccess(companyId: string) {
   const company = await prisma.company.findUnique({ where: { id: companyId } })
@@ -305,6 +306,14 @@ export async function closeMonth(
     },
   })
 
+  await createAuditLog({
+    tableName: "month_closes",
+    recordId: result.id,
+    operation: "MONTH_CLOSE",
+    userId: session.user.id,
+    afterData: { companyId, yearMonth },
+  })
+
   revalidatePath("/cashflow-table")
   revalidatePath("/monthly-close")
   return bigintToJson(result)
@@ -342,6 +351,16 @@ export async function reopenMonth(
       reopenedBy: session.user.id,
       reopenReason: reason.trim(),
     },
+  })
+
+  await createAuditLog({
+    tableName: "month_closes",
+    recordId: result.id,
+    operation: "MONTH_REOPEN",
+    userId: session.user.id,
+    beforeData: { companyId, yearMonth, isClosed: true },
+    afterData: { companyId, yearMonth, isClosed: false },
+    reason: reason.trim(),
   })
 
   revalidatePath("/cashflow-table")

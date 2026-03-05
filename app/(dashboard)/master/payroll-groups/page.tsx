@@ -15,7 +15,24 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Switch } from "@/components/ui/switch"
 import { Plus, Pencil, Trash2, Loader2 } from "lucide-react"
 
-type PayrollGroupItem = Awaited<ReturnType<typeof getPayrollGroups>>[number]
+type PayrollGroupItem = {
+  id: string
+  companyId: string
+  name: string
+  costType: string
+  midId: string | null
+  payDay: number | null
+  payDayIsMonthEnd: boolean
+  holidayAdjust: string | null
+  defaultAccountId: string | null
+  defaultCashAccountId: string | null
+  deductionPresets: unknown
+  headcount: number
+  displayOrder: number
+  isActive: boolean
+  createdAt: string
+  updatedAt: string
+}
 type AccountItem = Awaited<ReturnType<typeof getAccounts>>[number]
 
 const costTypeLabels: Record<string, string> = {
@@ -56,7 +73,7 @@ export default function PayrollGroupsPage() {
       getPayrollGroups(selectedCompany.id),
       getAccounts(selectedCompany.id),
     ])
-    setGroups(groupsData)
+    setGroups(groupsData as PayrollGroupItem[])
     setAccounts(accountsData)
     setLoading(false)
   }

@@ -6,6 +6,7 @@ import { TransactionType, TransactionStatus, PaymentMethod } from "@prisma/clien
 import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
 import { ensureMonthOpen } from "@/app/actions/cashflow-table"
+import { createAuditLog } from "@/lib/audit-log"
 
 export type TransactionWithRelations = {
   id: string
@@ -136,7 +137,7 @@ export async function createTransaction(data: {
     summary?: string
   }[]
 }) {
-  await requireSession()
+  const session = await requireSession()
   await ensureMonthOpen(data.companyId, data.accountingMonth)
 
   const result = await prisma.transaction.create({
@@ -171,6 +172,14 @@ export async function createTransaction(data: {
     include: transactionInclude,
   })
 
+  await createAuditLog({
+    tableName: "transactions",
+    recordId: result.id,
+    operation: "CREATE",
+    userId: session.user.id,
+    afterData: { type: data.type, amount: data.amount, accountingMonth: data.accountingMonth },
+  })
+
   revalidatePath("/expenses")
   revalidatePath("/sales")
   revalidatePath("/costs")
@@ -195,7 +204,7 @@ export async function updateTransaction(
     transferAmount?: string | null
   }
 ) {
-  await requireSession()
+  const session = await requireSession()
 
   const existing = await prisma.transaction.findUnique({ where: { id } })
   if (!existing || existing.companyId !== companyId) {
@@ -206,6 +215,7 @@ export async function updateTransaction(
   }
   await ensureMonthOpen(companyId, existing.accountingMonth)
 
+  const beforeData = bigintToJson(existing) as Record<string, unknown>
   const updateData: Record<string, unknown> = {}
   if (data.accountId !== undefined) updateData.accountId = data.accountId
   if (data.partnerId !== undefined) updateData.partnerId = data.partnerId
@@ -224,6 +234,15 @@ export async function updateTransaction(
     where: { id },
     data: updateData,
     include: transactionInclude,
+  })
+
+  await createAuditLog({
+    tableName: "transactions",
+    recordId: id,
+    operation: "UPDATE",
+    userId: session.user.id,
+    beforeData,
+    afterData: data as Record<string, unknown>,
   })
 
   revalidatePath("/expenses")
@@ -271,6 +290,16 @@ export async function updateTransactionStatus(
     data: updateData,
   })
 
+  const operation = status === "CONFIRMED" ? "CONFIRM" : status === "DRAFT" ? "UNCONFIRM" : "UPDATE"
+  await createAuditLog({
+    tableName: "transactions",
+    recordId: id,
+    operation,
+    userId: session.user.id,
+    beforeData: { status: existing.status },
+    afterData: { status },
+  })
+
   revalidatePath("/expenses")
   revalidatePath("/sales")
   revalidatePath("/costs")
@@ -278,7 +307,7 @@ export async function updateTransactionStatus(
 }
 
 export async function deleteTransaction(id: string, companyId: string) {
-  await requireSession()
+  const session = await requireSession()
 
   const existing = await prisma.transaction.findUnique({ where: { id } })
   if (!existing || existing.companyId !== companyId) {
@@ -288,6 +317,14 @@ export async function deleteTransaction(id: string, companyId: string) {
     throw new Error("Only DRAFT transactions can be deleted")
   }
   await ensureMonthOpen(companyId, existing.accountingMonth)
+
+  await createAuditLog({
+    tableName: "transactions",
+    recordId: id,
+    operation: "DELETE",
+    userId: session.user.id,
+    beforeData: bigintToJson(existing) as Record<string, unknown>,
+  })
 
   await prisma.transaction.delete({ where: { id } })
   revalidatePath("/expenses")

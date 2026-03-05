@@ -21,6 +21,8 @@ import {
   CalendarCheck,
   TableProperties,
   ArrowRightLeft,
+  Building,
+  MinusCircle,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { CompanySwitcher } from "@/components/company-switcher"
@@ -49,9 +51,11 @@ const managementNavigation = [
 const masterNavigation = [
   { name: "会社一覧", href: "/master/companies", icon: Building2 },
   { name: "銀行口座", href: "/master/accounts", icon: CreditCard },
+  { name: "銀行・支店", href: "/master/banks", icon: Building },
   { name: "取引先", href: "/master/partners", icon: Handshake },
   { name: "給与グループ", href: "/master/payroll-groups", icon: UserCog },
   { name: "勘定科目", href: "/master/categories", icon: FolderTree },
+  { name: "控除カテゴリ", href: "/master/deduction-categories", icon: MinusCircle },
   { name: "設定", href: "/master/settings", icon: Settings },
 ]
 
