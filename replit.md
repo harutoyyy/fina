@@ -29,11 +29,11 @@ app/
     partners/               - Trading partner management
     categories/             - Account category management (3-level)
     settings/               - System settings (placeholder)
-  (dashboard)/cashflow/     - Cash flow (placeholder)
-  (dashboard)/expenses/     - Expense input (placeholder)
-  (dashboard)/sales/        - Sales input (placeholder)
-  (dashboard)/costs/        - Cost payment (placeholder)
-  (dashboard)/salary/       - Payroll (placeholder)
+  (dashboard)/cashflow/     - Fund transfer input
+  (dashboard)/expenses/     - Expense input
+  (dashboard)/sales/        - Sales input (parent-child)
+  (dashboard)/costs/        - Cost payment input
+  (dashboard)/salary/       - Salary/payroll input
   (dashboard)/loans/        - Loan management (placeholder)
   (dashboard)/leases/       - Lease management (placeholder)
   (dashboard)/recurring/    - Recurring templates (placeholder)
@@ -115,6 +115,9 @@ docs/
   - /sales: Parent-child (invoice→payments), split payments, remaining balance tracking
   - /costs: Cost breakdown (labor/welfare/materials/tax), recorded vs actual amounts
   - /cashflow: Fund transfer form, inter-company support, transfer list
-- Phase 3 (Payroll): TODO - Salary/bonus management
+- Phase 3 (Payroll): COMPLETE - Salary/bonus management
+  - app/actions/payroll.ts: PayrollGroup CRUD, SalaryEntry CRUD, deductions, payment details, status flow
+  - /master/payroll-groups: Payroll group master management (name, cost type, pay day, accounts, headcount)
+  - /salary: Salary entry input with auto-calculation (social insurance 15%, consumption tax 10%), deductions, payment details, status workflow
 - Phase 4 (Reports): TODO - Cash flow table, monthly closing
 - Phase 5 (Advanced): TODO - Loan/lease management, recurring templates
