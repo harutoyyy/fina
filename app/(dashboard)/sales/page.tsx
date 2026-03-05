@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, Fragment } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -446,8 +446,8 @@ export default function SalesPage() {
                   const childrenTotal = getChildrenTotal(txn)
                   const remaining = getRemainingAmount(txn)
                   return (
-                    <>
-                      <TableRow key={txn.id} className="cursor-pointer" onClick={() => toggleExpand(txn.id)}>
+                    <Fragment key={txn.id}>
+                      <TableRow className="cursor-pointer" onClick={() => toggleExpand(txn.id)}>
                         <TableCell>
                           <span className="text-xs">{isExpanded ? "▼" : "▶"}</span>
                           {txn.children.length > 0 && (
@@ -529,7 +529,7 @@ export default function SalesPage() {
                           </TableCell>
                         </TableRow>
                       )}
-                    </>
+                    </Fragment>
                   )
                 })}
               </TableBody>
