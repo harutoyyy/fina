@@ -107,7 +107,14 @@ docs/
 ## Phase Status
 
 - Phase 1 (Foundation): COMPLETE - Auth, layout, master management pages
-- Phase 2 (Transactions): TODO - Expense/sales/cost input, fund transfers
+- Phase 2 (Transactions): COMPLETE - Expense/sales/cost input, fund transfers
+  - app/actions/transactions.ts: CRUD, status flow (DRAFT→READY→CONFIRMED)
+  - app/actions/fund-transfers.ts: Inter/intra-company fund transfers with paired transactions
+  - lib/format.ts: BigInt↔yen formatting, date utils
+  - /expenses: Single-entry expense form, list with month/status filters, status workflow
+  - /sales: Parent-child (invoice→payments), split payments, remaining balance tracking
+  - /costs: Cost breakdown (labor/welfare/materials/tax), recorded vs actual amounts
+  - /cashflow: Fund transfer form, inter-company support, transfer list
 - Phase 3 (Payroll): TODO - Salary/bonus management
 - Phase 4 (Reports): TODO - Cash flow table, monthly closing
 - Phase 5 (Advanced): TODO - Loan/lease management, recurring templates
