@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
+import SalaryExcelImport from "@/components/salary-excel-import"
 import { getAccounts } from "@/app/actions/accounts"
 import {
   getPayrollGroups,
@@ -21,6 +22,7 @@ import {
   upsertSalaryDeductions,
   upsertPaymentDetails,
   updateSalaryStatus,
+  generateSalaryJournalEntries,
 } from "@/app/actions/payroll"
 import { formatYen, getCurrentMonth } from "@/lib/format"
 
@@ -359,6 +361,19 @@ export default function SalaryPage() {
     }
   }
 
+  const handleGenerateJournal = async (entryId: string) => {
+    if (!selectedCompany) return
+    if (!confirm("この給与データから仕訳を自動生成しますか？\n控除項目ごとに取引が作成されます。")) return
+    try {
+      const result = await generateSalaryJournalEntries(entryId, selectedCompany.id)
+      alert(`${result.count}件の仕訳を生成しました`)
+      loadEntries(selectedCompany.id)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "仕訳生成に失敗しました"
+      alert(msg)
+    }
+  }
+
   const accountLabel = (a: AccountOption) =>
     [a.bankName, a.branchName, a.accountNumber].filter(Boolean).join(" ") || a.id
 
@@ -387,9 +402,12 @@ export default function SalaryPage() {
           <h1 className="text-2xl font-bold tracking-tight">給与入力</h1>
           <p className="text-muted-foreground">{selectedCompany.name} の給与・賞与を入力・管理します</p>
         </div>
-        <Button onClick={openNewForm} disabled={payrollGroups.length === 0}>
-          新規給与入力
-        </Button>
+        <div className="flex items-center gap-2">
+          <SalaryExcelImport companyId={selectedCompany.id} onComplete={loadSalaryEntries} />
+          <Button onClick={openNewForm} disabled={payrollGroups.length === 0}>
+            新規給与入力
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -488,7 +506,7 @@ export default function SalaryPage() {
                             </>
                           )}
                           {entry.status === "CONFIRMED" && (
-                            <span className="text-xs text-muted-foreground">確定済</span>
+                            <Button variant="ghost" size="sm" onClick={() => handleGenerateJournal(entry.id)}>仕訳生成</Button>
                           )}
                         </div>
                       </TableCell>

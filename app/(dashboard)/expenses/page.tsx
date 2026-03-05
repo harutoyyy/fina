@@ -23,6 +23,8 @@ import {
   type TransactionWithRelations,
 } from "@/app/actions/transactions"
 import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
+import EvidencePanel from "@/components/evidence-panel"
+import { Paperclip } from "lucide-react"
 
 type AccountOption = {
   id: string
@@ -100,6 +102,7 @@ export default function ExpensesPage() {
   const [form, setForm] = useState(initialFormState)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [evidenceTargetId, setEvidenceTargetId] = useState<string | null>(null)
 
   const expenseMidCategories = categories
     .filter((m) => m.direction === "EXPENSE")
@@ -439,6 +442,9 @@ export default function ExpensesPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
+                          <Button variant="ghost" size="icon" onClick={() => setEvidenceTargetId(tx.id)} title="証憑">
+                            <Paperclip className="h-4 w-4" />
+                          </Button>
                           {tx.status === "DRAFT" && (
                             <>
                               <Button variant="ghost" size="sm" onClick={() => handleEdit(tx)}>編集</Button>
@@ -459,6 +465,14 @@ export default function ExpensesPage() {
           )}
         </CardContent>
       </Card>
+
+      {evidenceTargetId && (
+        <EvidencePanel
+          transactionId={evidenceTargetId}
+          open={!!evidenceTargetId}
+          onOpenChange={(open) => { if (!open) setEvidenceTargetId(null) }}
+        />
+      )}
     </div>
   )
 }

@@ -124,3 +124,32 @@
     @apply bg-background text-foreground;
   }
 }
+
+@media print {
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  nav, aside, header,
+  [data-slot="sidebar"],
+  button,
+  .no-print {
+    display: none !important;
+  }
+  main {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+  table {
+    font-size: 9pt !important;
+  }
+  th, td {
+    padding: 2px 4px !important;
+  }
+}

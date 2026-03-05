@@ -14,6 +14,7 @@ import { getAccounts } from "@/app/actions/accounts"
 import { getPartners } from "@/app/actions/partners"
 import { getTransactions, createTransaction, updateTransaction, updateTransactionStatus, deleteTransaction, type TransactionWithRelations } from "@/app/actions/transactions"
 import { formatYen, getCurrentMonth, formatDate } from "@/lib/format"
+import { DeductionDetailsPanel } from "@/components/deduction-details-panel"
 
 type AccountOption = { id: string; bankName: string | null; branchName: string | null; accountNumber: string | null }
 type PartnerOption = { id: string; name: string }
@@ -82,6 +83,8 @@ export default function CostsPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [form, setForm] = useState<CostFormData>(emptyForm)
+  const [deductionTarget, setDeductionTarget] = useState<TransactionWithRelations | null>(null)
+  const [deductionOpen, setDeductionOpen] = useState(false)
 
   const loadData = useCallback(async () => {
     if (!selectedCompany) return
@@ -320,12 +323,14 @@ export default function CostsPage() {
                             <>
                               <Button variant="ghost" size="sm" onClick={() => openEditDialog(txn)}>編集</Button>
                               <Button variant="ghost" size="sm" onClick={() => handleStatusChange(txn.id, "READY")}>準備完了</Button>
+                              <Button variant="ghost" size="sm" onClick={() => { setDeductionTarget(txn); setDeductionOpen(true) }}>控除</Button>
                               <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDelete(txn.id)}>削除</Button>
                             </>
                           )}
                           {txn.status === "READY" && (
                             <>
                               <Button variant="ghost" size="sm" onClick={() => handleStatusChange(txn.id, "DRAFT")}>差戻し</Button>
+                              <Button variant="ghost" size="sm" onClick={() => { setDeductionTarget(txn); setDeductionOpen(true) }}>控除</Button>
                               <Button variant="ghost" size="sm" onClick={() => handleStatusChange(txn.id, "CONFIRMED")}>確定</Button>
                             </>
                           )}
@@ -476,6 +481,18 @@ export default function CostsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {deductionTarget && (
+        <DeductionDetailsPanel
+          transactionId={deductionTarget.id}
+          companyId={selectedCompany!.id}
+          forType="COST"
+          diffAmount={parseInt(deductionTarget.recordedAmount || deductionTarget.amount || "0") - parseInt(deductionTarget.transferAmount || deductionTarget.amount || "0")}
+          open={deductionOpen}
+          onOpenChange={setDeductionOpen}
+          onSaved={loadData}
+        />
+      )}
     </div>
   )
 }

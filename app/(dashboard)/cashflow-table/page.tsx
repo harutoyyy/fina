@@ -11,14 +11,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { getAccounts } from "@/app/actions/accounts"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   getCashFlowTable,
   getMonthCloseStatus,
   closeMonth,
   reopenMonth,
+  deferTransaction,
+  deferTransactionsBatch,
   type CashFlowTableData,
 } from "@/app/actions/cashflow-table"
 import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
+import { Printer } from "lucide-react"
 
 type AccountOption = {
   id: string
@@ -73,6 +77,8 @@ export default function CashFlowTablePage() {
   const [reopenDialogOpen, setReopenDialogOpen] = useState(false)
   const [reopenReason, setReopenReason] = useState("")
   const [actionLoading, setActionLoading] = useState(false)
+  const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
+  const [deferLoading, setDeferLoading] = useState(false)
 
   const loadAccounts = useCallback(async (companyId: string) => {
     const accts = await getAccounts(companyId)
@@ -161,6 +167,55 @@ export default function CashFlowTablePage() {
     }
   }
 
+  const toggleRowSelection = (id: string) => {
+    setSelectedRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleAllRows = () => {
+    const deferableRows = filteredRows.filter(r => r.status !== "CONFIRMED")
+    if (selectedRows.size === deferableRows.length) {
+      setSelectedRows(new Set())
+    } else {
+      setSelectedRows(new Set(deferableRows.map(r => r.id)))
+    }
+  }
+
+  const handleDeferSelected = async () => {
+    if (!selectedCompany || selectedRows.size === 0) return
+    if (!confirm(`${selectedRows.size}件の取引を翌月へ繰り延べますか？`)) return
+    setDeferLoading(true)
+    try {
+      await deferTransactionsBatch(Array.from(selectedRows), selectedCompany.id)
+      setSelectedRows(new Set())
+      await loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
+    } catch (e) {
+      console.error("Failed to defer:", e)
+      alert("繰り延べに失敗しました")
+    } finally {
+      setDeferLoading(false)
+    }
+  }
+
+  const handleDeferSingle = async (transactionId: string) => {
+    if (!selectedCompany) return
+    if (!confirm("この取引を翌月へ繰り延べますか？")) return
+    setDeferLoading(true)
+    try {
+      await deferTransaction(transactionId, selectedCompany.id)
+      await loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
+    } catch (e) {
+      console.error("Failed to defer:", e)
+      alert(e instanceof Error ? e.message : "繰り延べに失敗しました")
+    } finally {
+      setDeferLoading(false)
+    }
+  }
+
   const isClosed = monthCloseStatus?.isClosed === true
 
   if (!selectedCompany) {
@@ -182,6 +237,15 @@ export default function CashFlowTablePage() {
           <p className="text-muted-foreground">{selectedCompany.name} の資金繰り表</p>
         </div>
         <div className="flex items-center gap-2">
+          {!isClosed && selectedRows.size > 0 && (
+            <Button
+              variant="outline"
+              onClick={handleDeferSelected}
+              disabled={deferLoading}
+            >
+              {deferLoading ? "処理中..." : `${selectedRows.size}件を翌月へ繰り延べ`}
+            </Button>
+          )}
           {isClosed ? (
             <Button
               variant="outline"
@@ -201,6 +265,9 @@ export default function CashFlowTablePage() {
           {isClosed && (
             <Badge variant="default">締め済み</Badge>
           )}
+          <Button variant="outline" size="icon" onClick={() => window.print()} title="印刷">
+            <Printer className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
@@ -342,6 +409,14 @@ export default function CashFlowTablePage() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    {!isClosed && (
+                      <TableHead className="w-8">
+                        <Checkbox
+                          checked={selectedRows.size > 0 && selectedRows.size === filteredRows.filter(r => r.status !== "CONFIRMED").length}
+                          onCheckedChange={() => toggleAllRows()}
+                        />
+                      </TableHead>
+                    )}
                     <TableHead className="whitespace-nowrap">実出納日</TableHead>
                     <TableHead className="whitespace-nowrap">予定日</TableHead>
                     <TableHead className="whitespace-nowrap">取引種別</TableHead>
@@ -354,7 +429,7 @@ export default function CashFlowTablePage() {
                     <TableHead className="whitespace-nowrap">中項目/小項目</TableHead>
                     <TableHead className="text-right whitespace-nowrap">差額</TableHead>
                     <TableHead className="whitespace-nowrap">ステータス</TableHead>
-                    <TableHead className="whitespace-nowrap">最終更新日</TableHead>
+                    <TableHead className="whitespace-nowrap">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -367,8 +442,18 @@ export default function CashFlowTablePage() {
                       ? [detail.midName, detail.subName].filter(Boolean).join(" / ")
                       : "—"
 
+                    const canDefer = row.status !== "CONFIRMED"
                     return (
                       <TableRow key={row.id}>
+                        {!isClosed && (
+                          <TableCell>
+                            <Checkbox
+                              checked={selectedRows.has(row.id)}
+                              onCheckedChange={() => toggleRowSelection(row.id)}
+                              disabled={!canDefer}
+                            />
+                          </TableCell>
+                        )}
                         <TableCell className="whitespace-nowrap">
                           {row.transactionDate ? formatDate(row.transactionDate) : "—"}
                         </TableCell>
@@ -407,8 +492,17 @@ export default function CashFlowTablePage() {
                             {STATUS_LABELS[row.status] || row.status}
                           </Badge>
                         </TableCell>
-                        <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
-                          {formatDate(row.updatedAt)}
+                        <TableCell>
+                          {!isClosed && canDefer && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeferSingle(row.id)}
+                              disabled={deferLoading}
+                            >
+                              繰延
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                     )

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Pencil, Loader2 } from "lucide-react"
 
@@ -25,7 +26,7 @@ export default function CompaniesPage() {
     postalCode: "", addressPrefecture: "", addressCity: "", addressStreet: "", addressBuilding: "",
     phone: "", fax: "", email: "", website: "",
     corporateNumber: "", invoiceNumber: "",
-    fiscalMonth: 3, notes: "",
+    fiscalMonth: 3, establishedDate: "", status: "ACTIVE", notes: "",
   })
 
   const loadCompanies = async () => {
@@ -48,6 +49,8 @@ export default function CompaniesPage() {
       phone: company.phone || "", fax: company.fax || "", email: company.email || "",
       website: company.website || "", corporateNumber: company.corporateNumber || "",
       invoiceNumber: company.invoiceNumber || "", fiscalMonth: company.fiscalMonth,
+      establishedDate: company.establishedDate ? company.establishedDate.toISOString().split("T")[0] : "",
+      status: company.status || "ACTIVE",
       notes: company.notes || "",
     })
   }
@@ -73,6 +76,8 @@ export default function CompaniesPage() {
       website: formData.website || undefined,
       corporateNumber: formData.corporateNumber || undefined,
       invoiceNumber: formData.invoiceNumber || undefined,
+      establishedDate: formData.establishedDate || undefined,
+      status: formData.status,
       notes: formData.notes || undefined,
     })
     setSaving(false)
@@ -191,6 +196,10 @@ export default function CompaniesPage() {
                 <Input value={formData.addressStreet} onChange={(e) => setFormData({ ...formData, addressStreet: e.target.value })} />
               </div>
             </div>
+            <div className="space-y-2">
+              <Label>建物名</Label>
+              <Input value={formData.addressBuilding} onChange={(e) => setFormData({ ...formData, addressBuilding: e.target.value })} />
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>電話番号</Label>
@@ -203,12 +212,45 @@ export default function CompaniesPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
+                <Label>メールアドレス</Label>
+                <Input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label>Webサイト</Label>
+                <Input value={formData.website} onChange={(e) => setFormData({ ...formData, website: e.target.value })} placeholder="https://" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>法人番号（13桁）</Label>
+                <Input value={formData.corporateNumber} onChange={(e) => setFormData({ ...formData, corporateNumber: e.target.value })} maxLength={13} />
+              </div>
+              <div className="space-y-2">
                 <Label>インボイス番号</Label>
                 <Input value={formData.invoiceNumber} onChange={(e) => setFormData({ ...formData, invoiceNumber: e.target.value })} />
               </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>決算月</Label>
                 <Input type="number" min={1} max={12} value={formData.fiscalMonth} onChange={(e) => setFormData({ ...formData, fiscalMonth: parseInt(e.target.value) || 3 })} />
+              </div>
+              <div className="space-y-2">
+                <Label>設立日</Label>
+                <Input type="date" value={formData.establishedDate} onChange={(e) => setFormData({ ...formData, establishedDate: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label>ステータス</Label>
+                <Select value={formData.status} onValueChange={(v) => setFormData({ ...formData, status: v })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ACTIVE">稼働中</SelectItem>
+                    <SelectItem value="DORMANT">休眠</SelectItem>
+                    <SelectItem value="LIQUIDATING">清算中</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div className="space-y-2">

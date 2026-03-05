@@ -368,6 +368,89 @@ export async function reopenMonth(
   return bigintToJson(result)
 }
 
+export async function deferTransaction(
+  transactionId: string,
+  companyId: string,
+  targetMonth?: string
+) {
+  const session = await requireSession()
+  await verifyCompanyAccess(companyId)
+
+  const existing = await prisma.transaction.findUnique({
+    where: { id: transactionId },
+  })
+  if (!existing || existing.companyId !== companyId) {
+    throw new Error("Transaction not found")
+  }
+
+  if (existing.status === "CONFIRMED") {
+    throw new Error("確定済の取引は繰り延べできません")
+  }
+
+  await ensureMonthOpen(companyId, existing.accountingMonth)
+
+  const currentMonth = existing.accountingMonth
+  let nextMonth: string
+  if (targetMonth) {
+    nextMonth = targetMonth
+  } else {
+    const [y, m] = currentMonth.split("-").map(Number)
+    const nextDate = new Date(y, m, 1)
+    nextMonth = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, "0")}`
+  }
+
+  let newScheduledDate = existing.scheduledDate
+  if (existing.scheduledDate) {
+    const [ny, nm] = nextMonth.split("-").map(Number)
+    const oldDay = existing.scheduledDate.getDate()
+    const lastDayOfNextMonth = new Date(ny, nm, 0).getDate()
+    const day = Math.min(oldDay, lastDayOfNextMonth)
+    newScheduledDate = new Date(ny, nm - 1, day)
+  }
+
+  const result = await prisma.transaction.update({
+    where: { id: transactionId },
+    data: {
+      accountingMonth: nextMonth,
+      scheduledDate: newScheduledDate,
+    },
+  })
+
+  await createAuditLog({
+    tableName: "transactions",
+    recordId: transactionId,
+    operation: "UPDATE",
+    userId: session.user.id,
+    beforeData: { accountingMonth: currentMonth },
+    afterData: { accountingMonth: nextMonth, action: "DEFER" },
+  })
+
+  revalidatePath("/cashflow-table")
+  return bigintToJson(result)
+}
+
+export async function deferTransactionsBatch(
+  transactionIds: string[],
+  companyId: string,
+  targetMonth?: string
+) {
+  const session = await requireSession()
+  await verifyCompanyAccess(companyId)
+
+  const results = []
+  for (const txId of transactionIds) {
+    try {
+      const result = await deferTransaction(txId, companyId, targetMonth)
+      results.push({ id: txId, success: true, result })
+    } catch (e) {
+      results.push({ id: txId, success: false, error: e instanceof Error ? e.message : "Unknown error" })
+    }
+  }
+
+  revalidatePath("/cashflow-table")
+  return results
+}
+
 export async function updateDisplayOrder(
   transactionId: string,
   companyId: string,

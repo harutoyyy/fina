@@ -51,13 +51,18 @@ export async function updateCompany(id: string, data: {
   corporateNumber?: string
   invoiceNumber?: string
   fiscalMonth?: number
+  establishedDate?: string
   status?: string
   notes?: string
 }) {
   await requireSession()
+  const { establishedDate, ...rest } = data
   const result = await prisma.company.update({
     where: { id },
-    data,
+    data: {
+      ...rest,
+      establishedDate: establishedDate ? new Date(establishedDate) : undefined,
+    },
   })
   revalidatePath("/master/companies")
   return result

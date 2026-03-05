@@ -23,6 +23,8 @@ import {
   ArrowRightLeft,
   Building,
   MinusCircle,
+  Inbox,
+  Banknote,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { CompanySwitcher } from "@/components/company-switcher"
@@ -36,12 +38,14 @@ const navigation = [
 
 const inputNavigation = [
   { name: "経費入力", href: "/expenses", icon: Receipt },
+  { name: "経費確定BOX", href: "/expense-box", icon: Inbox },
   { name: "売上入力", href: "/sales", icon: TrendingUp },
   { name: "原価支払", href: "/costs", icon: Hammer },
   { name: "給与入力", href: "/salary", icon: Users },
 ]
 
 const managementNavigation = [
+  { name: "現金引出", href: "/cash-withdrawal", icon: Banknote },
   { name: "借入管理", href: "/loans", icon: Landmark },
   { name: "リース管理", href: "/leases", icon: Repeat },
   { name: "定期テンプレート", href: "/recurring", icon: BookOpen },

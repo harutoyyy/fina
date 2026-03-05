@@ -137,3 +137,20 @@ docs/
   - /leases: Lease contract list, creation with payment schedule, detail view, schedule paid marking, regeneration
   - /recurring: Template list, creation with frequency/amount settings, monthly batch generation
 - Step 1 (基盤強化): COMPLETE - Audit logging, bank master, deduction categories, partner bank accounts/sites with companyId ownership verification
+- Step 1 (確定フロー強化): COMPLETE - A1-A4 (経費/売上/原価バリデーション、控除内訳入力UI)
+- Step 1 (機能補完): COMPLETE - B7 (繰り延べ), C5 (経費確定BOX), B6 (給与自動仕訳)
+- Step 2 (C1): COMPLETE - ダッシュボード実データ化 (口座/取引先数、メイン口座残高、直近取引)
+- Step 2 (C2): COMPLETE - 会社マスタ不足フィールド追加 (建物名, メール, Web, 法人番号, 設立日, ステータス)
+- Step 2 (B4): COMPLETE - 証憑アップロード（モック）: Evidence CRUD actions + 経費ページに証憑パネル統合
+- Step 2 (B1): COMPLETE - 現金引出バッチ + 金種表: CashWithdrawalBatch actions + UI + sidebar
+- Step 2 (C3): COMPLETE - 資金繰り表 印刷機能 (print CSS, 印刷ボタン)
+- Step 2 (B5): COMPLETE - 給与Excelインポート (xlsx parser + import action + UI)
+
+## New Files Added (Step 2)
+
+- `app/actions/evidence.ts` - Evidence CRUD (upload mock, delete, list)
+- `app/actions/cash-withdrawal.ts` - CashWithdrawalBatch CRUD, denomination, confirm/delete
+- `app/actions/salary-import.ts` - Salary Excel import action
+- `components/evidence-panel.tsx` - Evidence attachment dialog
+- `components/salary-excel-import.tsx` - Salary Excel import UI with preview
+- `app/(dashboard)/cash-withdrawal/page.tsx` - Cash withdrawal batch page

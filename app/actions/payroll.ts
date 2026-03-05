@@ -5,6 +5,7 @@ import { requireSession } from "@/lib/auth-server"
 import { TransactionStatus, PaymentMethod } from "@prisma/client"
 import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
+import { createAuditLog } from "@/lib/audit-log"
 
 export async function getPayrollGroups(companyId: string) {
   await requireSession()
@@ -451,4 +452,211 @@ export async function updateSalaryStatus(
 
   revalidatePath("/salary")
   return bigintToJson(result)
+}
+
+export async function getSalaryJournalMappings() {
+  await requireSession()
+  return prisma.salaryJournalMapping.findMany({
+    where: { isActive: true },
+    orderBy: { deductionItemName: "asc" },
+  })
+}
+
+export async function upsertSalaryJournalMapping(data: {
+  deductionItemName: string
+  majorId: string
+  midId: string
+  subId?: string
+  classification?: string
+}) {
+  await requireSession()
+
+  const result = await prisma.salaryJournalMapping.upsert({
+    where: { deductionItemName: data.deductionItemName },
+    create: {
+      deductionItemName: data.deductionItemName,
+      majorId: data.majorId,
+      midId: data.midId,
+      subId: data.subId || null,
+      classification: data.classification || null,
+    },
+    update: {
+      majorId: data.majorId,
+      midId: data.midId,
+      subId: data.subId || null,
+      classification: data.classification || null,
+      isActive: true,
+    },
+  })
+
+  revalidatePath("/salary")
+  return result
+}
+
+export async function generateSalaryJournalEntries(
+  salaryEntryId: string,
+  companyId: string
+) {
+  const session = await requireSession()
+
+  const entry = await prisma.salaryEntry.findUnique({
+    where: { id: salaryEntryId },
+    include: {
+      payrollGroup: {
+        select: {
+          companyId: true,
+          name: true,
+          defaultAccountId: true,
+          midId: true,
+        },
+      },
+      deductions: {
+        orderBy: { displayOrder: "asc" },
+      },
+      paymentDetails: {
+        orderBy: { displayOrder: "asc" },
+      },
+    },
+  })
+
+  if (!entry || entry.payrollGroup.companyId !== companyId) {
+    throw new Error("SalaryEntry not found")
+  }
+
+  if (entry.status !== "CONFIRMED") {
+    throw new Error("給与が確定済みでない場合は仕訳を生成できません")
+  }
+
+  const mappings = await prisma.salaryJournalMapping.findMany({
+    where: { isActive: true },
+  })
+  const mappingMap = new Map(mappings.map((m) => [m.deductionItemName, m]))
+
+  const accountId = entry.payrollGroup.defaultAccountId
+  if (!accountId) {
+    throw new Error("給与グループにデフォルト口座が設定されていません")
+  }
+
+  const existingJournals = await prisma.transaction.findMany({
+    where: {
+      companyId,
+      summary: { startsWith: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth}` },
+    },
+  })
+  if (existingJournals.length > 0) {
+    throw new Error("この給与の仕訳はすでに生成済みです")
+  }
+
+  const createdTransactions: string[] = []
+
+  for (const ded of entry.deductions) {
+    if (ded.amount <= BigInt(0)) continue
+
+    const mapping = mappingMap.get(ded.itemName)
+    const midId = mapping?.midId || ded.midId
+    const subId = mapping?.subId || ded.subId
+    const classification = mapping?.classification || null
+
+    if (!midId) continue
+
+    const tx = await prisma.transaction.create({
+      data: {
+        companyId,
+        accountId,
+        type: "EXPENSE",
+        status: "DRAFT",
+        accountingMonth: entry.payMonth,
+        transactionDate: entry.payDate,
+        amount: ded.amount * BigInt(-1),
+        classification,
+        summary: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth} ${ded.itemName}`,
+        displayOrder: 0,
+      },
+    })
+
+    await prisma.transactionDetail.create({
+      data: {
+        transactionId: tx.id,
+        midId,
+        subId,
+        amount: ded.amount * BigInt(-1),
+        summary: ded.itemName,
+        displayOrder: 0,
+      },
+    })
+
+    createdTransactions.push(tx.id)
+  }
+
+  for (const pd of entry.paymentDetails) {
+    const payAccountId = pd.accountId || accountId
+
+    const tx = await prisma.transaction.create({
+      data: {
+        companyId,
+        accountId: payAccountId,
+        type: "SALARY",
+        status: "DRAFT",
+        accountingMonth: entry.payMonth,
+        transactionDate: pd.paymentDate,
+        amount: pd.amount * BigInt(-1),
+        paymentMethod: pd.paymentMethod,
+        summary: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth} 差引支給`,
+        displayOrder: 0,
+      },
+    })
+
+    createdTransactions.push(tx.id)
+  }
+
+  if (entry.socialInsuranceReserve > BigInt(0)) {
+    const tx = await prisma.transaction.create({
+      data: {
+        companyId,
+        accountId,
+        type: "EXPENSE",
+        status: "DRAFT",
+        accountingMonth: entry.payMonth,
+        transactionDate: entry.payDate,
+        amount: entry.socialInsuranceReserve * BigInt(-1),
+        summary: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth} 社保積立`,
+        displayOrder: 0,
+      },
+    })
+    createdTransactions.push(tx.id)
+  }
+
+  if (entry.consumptionTaxReserve > BigInt(0)) {
+    const tx = await prisma.transaction.create({
+      data: {
+        companyId,
+        accountId,
+        type: "EXPENSE",
+        status: "DRAFT",
+        accountingMonth: entry.payMonth,
+        transactionDate: entry.payDate,
+        amount: entry.consumptionTaxReserve * BigInt(-1),
+        summary: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth} 消費税積立`,
+        displayOrder: 0,
+      },
+    })
+    createdTransactions.push(tx.id)
+  }
+
+  await createAuditLog({
+    tableName: "salary_entries",
+    recordId: salaryEntryId,
+    operation: "CREATE",
+    userId: session.user.id,
+    afterData: {
+      action: "GENERATE_JOURNAL",
+      transactionIds: createdTransactions,
+      count: createdTransactions.length,
+    },
+  })
+
+  revalidatePath("/salary")
+  revalidatePath("/expenses")
+  revalidatePath("/cashflow-table")
+  return { success: true, count: createdTransactions.length, ids: createdTransactions }
 }
