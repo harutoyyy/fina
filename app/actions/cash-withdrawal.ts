@@ -6,15 +6,10 @@ import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
 
 async function verifyCompanyAccess(companyId: string) {
-  const session = await requireSession()
-  const profile = await prisma.userProfile.findUnique({
-    where: { authUserId: session.user.id },
-    select: { assignedCompanyIds: true },
-  })
-  if (!profile) throw new Error("プロフィールが見つかりません")
-  const ids = profile.assignedCompanyIds as string[]
-  if (!ids.includes(companyId)) throw new Error("この会社へのアクセス権がありません")
-  return session
+  await requireSession()
+  const company = await prisma.company.findUnique({ where: { id: companyId } })
+  if (!company) throw new Error("会社が見つかりません")
+  return company
 }
 
 async function getBatchWithCompany(batchId: string) {
