@@ -117,6 +117,7 @@ async function main() {
   // 2. 取引先の銀行口座・デフォルト科目
   // ============================================================
   await prisma.tradingPartnerBankAccount.createMany({
+    skipDuplicates: true,
     data: [
       { partnerId: ntt.id, bankCode: '0001', branchCode: '001', accountType: 'ORDINARY', accountNumber: '1111111', accountHolder: 'ｴﾇﾃｨﾃｨﾋｶﾞｼﾆﾎﾝ' },
       { partnerId: subcontractor.id, bankCode: '0134', branchCode: '201', accountType: 'ORDINARY', accountNumber: '2222222', accountHolder: 'ｻﾝｶｸｺｳﾑﾃﾝ' },
@@ -125,6 +126,7 @@ async function main() {
   });
 
   await prisma.tradingPartnerDefault.createMany({
+    skipDuplicates: true,
     data: [
       { partnerId: ntt.id, midId: 通信費.id },
       { partnerId: tepco.id, midId: 水道光熱費.id },
@@ -750,6 +752,7 @@ async function main() {
   // 11. 定期支払テンプレート（RecurringTemplate）
   // ============================================================
   await prisma.recurringTemplate.createMany({
+    skipDuplicates: true,
     data: [
       {
         companyId: okoshi.id,
@@ -842,6 +845,7 @@ async function main() {
   // 13. 監査ログ（サンプル）
   // ============================================================
   await prisma.auditLog.createMany({
+    skipDuplicates: true,
     data: [
       {
         tableName: 'transactions',
@@ -879,6 +883,7 @@ async function main() {
   // 14. 口座ロール
   // ============================================================
   await prisma.accountRole.createMany({
+    skipDuplicates: true,
     data: [
       { accountId: mainAccount.id, roleKey: 'SALARY_PAYMENT', roleName: '給与支払口座' },
       { accountId: mainAccount.id, roleKey: 'EXPENSE_PAYMENT', roleName: '経費支払口座' },
