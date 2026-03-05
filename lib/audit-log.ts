@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client"
 export type AuditOperation =
   | "CREATE"
   | "UPDATE"
+  | "UPDATE_AFTER_CLOSE"
   | "DELETE"
   | "CONFIRM"
   | "UNCONFIRM"

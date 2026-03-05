@@ -5,7 +5,7 @@ import { requireSession } from "@/lib/auth-server"
 import { TransactionType, TransactionStatus, PaymentMethod } from "@prisma/client"
 import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
-import { ensureMonthOpen } from "@/app/actions/cashflow-table"
+import { ensureMonthOpen, checkMonthClosed } from "@/app/actions/cashflow-table"
 import { createAuditLog } from "@/lib/audit-log"
 
 export type TransactionWithRelations = {
@@ -210,10 +210,26 @@ export async function updateTransaction(
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Transaction not found")
   }
-  if (existing.status !== "DRAFT") {
-    throw new Error("Only DRAFT transactions can be edited")
+
+  const monthClosed = await checkMonthClosed(companyId, existing.accountingMonth)
+
+  if (monthClosed) {
+    // 月締め後: 摘要・科目のみ変更可、金額/口座/日付/支払方法はブロック
+    const amountFields = ["accountId", "transactionDate", "scheduledDate", "accountingMonth", "amount", "paymentMethod", "invoiceDate", "invoiceAmount", "recordedAmount", "transferAmount"] as const
+    for (const field of amountFields) {
+      if (data[field] !== undefined) {
+        const existingVal = existing[field as keyof typeof existing]
+        const newVal = data[field]
+        if (String(existingVal ?? "") !== String(newVal ?? "")) {
+          throw new Error("月締め後は金額変更できません")
+        }
+      }
+    }
+  } else {
+    if (existing.status !== "DRAFT") {
+      throw new Error("Only DRAFT transactions can be edited")
+    }
   }
-  await ensureMonthOpen(companyId, existing.accountingMonth)
 
   const beforeData = bigintToJson(existing) as Record<string, unknown>
   const updateData: Record<string, unknown> = {}
@@ -239,7 +255,7 @@ export async function updateTransaction(
   await createAuditLog({
     tableName: "transactions",
     recordId: id,
-    operation: "UPDATE",
+    operation: monthClosed ? "UPDATE_AFTER_CLOSE" : "UPDATE",
     userId: session.user.id,
     beforeData,
     afterData: data as Record<string, unknown>,
@@ -364,6 +380,11 @@ export async function updateTransactionStatus(
     throw new Error(`Cannot change status from ${existing.status} to ${status}`)
   }
 
+  const monthClosed = await checkMonthClosed(companyId, existing.accountingMonth)
+  if (monthClosed && status === "CANCELLED") {
+    throw new Error("月締め後は取消できません")
+  }
+
   if (existing.type === "EXPENSE") {
     if (status === "READY") {
       await validateExpenseReady(existing)
@@ -461,6 +482,42 @@ export async function upsertTransactionDetails(
   }[]
 ) {
   await requireSession()
+
+  const tx = await prisma.transaction.findUnique({ where: { id: transactionId } })
+  if (tx) {
+    const monthClosed = await checkMonthClosed(tx.companyId, tx.accountingMonth)
+    if (monthClosed) {
+      // 月締め後は金額変更をブロック、科目と摘要のみ許可
+      const existingDetails = await prisma.transactionDetail.findMany({
+        where: { transactionId },
+        orderBy: { displayOrder: "asc" },
+      })
+      for (let i = 0; i < details.length; i++) {
+        const existing = existingDetails[i]
+        if (existing && BigInt(details[i].amount) !== existing.amount) {
+          throw new Error("月締め後は金額変更できません")
+        }
+      }
+      // 科目/摘要のみ更新
+      for (let i = 0; i < details.length; i++) {
+        const existing = existingDetails[i]
+        if (existing) {
+          await prisma.transactionDetail.update({
+            where: { id: existing.id },
+            data: {
+              midId: details[i].midId || null,
+              subId: details[i].subId || null,
+              summary: details[i].summary || null,
+            },
+          })
+        }
+      }
+      revalidatePath("/expenses")
+      revalidatePath("/sales")
+      revalidatePath("/costs")
+      return
+    }
+  }
 
   await prisma.transactionDetail.deleteMany({ where: { transactionId } })
 
@@ -561,6 +618,54 @@ export async function upsertDeductionDetails(
   revalidatePath("/sales")
   revalidatePath("/costs")
   return { success: true }
+}
+
+export async function copyPreviousDeductions(
+  transactionId: string,
+  companyId: string
+) {
+  await requireSession()
+
+  const tx = await prisma.transaction.findUnique({ where: { id: transactionId } })
+  if (!tx || tx.companyId !== companyId) {
+    throw new Error("Transaction not found")
+  }
+
+  const previousTx = await prisma.transaction.findFirst({
+    where: {
+      companyId,
+      partnerId: tx.partnerId,
+      type: tx.type,
+      accountingMonth: { lt: tx.accountingMonth },
+    },
+    orderBy: { accountingMonth: "desc" },
+  })
+
+  if (!previousTx) {
+    return { found: false, deductions: [] }
+  }
+
+  const details = await prisma.transactionDetail.findMany({
+    where: {
+      transactionId: previousTx.id,
+      deductionCategoryId: { not: null },
+    },
+    orderBy: { displayOrder: "asc" },
+  })
+
+  if (details.length === 0) {
+    return { found: false, deductions: [] }
+  }
+
+  return {
+    found: true,
+    deductions: details.map((d) => ({
+      deductionCategoryId: d.deductionCategoryId!,
+      deductionSubType: d.deductionSubType || "",
+      amount: "0",
+      summary: d.summary || "",
+    })),
+  }
 }
 
 export async function getDeductionDetailsForTransaction(transactionId: string) {

@@ -21,10 +21,19 @@ export async function checkMonthClosed(companyId: string, yearMonth: string): Pr
   return monthClose?.isClosed ?? false
 }
 
+export const isMonthClosed = checkMonthClosed
+
 export async function ensureMonthOpen(companyId: string, yearMonth: string) {
   const closed = await checkMonthClosed(companyId, yearMonth)
   if (closed) {
     throw new Error(`Month ${yearMonth} is closed. Reopen it before making changes.`)
+  }
+}
+
+export async function ensureMonthOpenForAmount(companyId: string, yearMonth: string) {
+  const closed = await checkMonthClosed(companyId, yearMonth)
+  if (closed) {
+    throw new Error("月締め後は金額変更できません")
   }
 }
 
@@ -473,4 +482,27 @@ export async function updateDisplayOrder(
 
   revalidatePath("/cashflow-table")
   return bigintToJson(result)
+}
+
+export async function reorderTransactions(
+  updates: { id: string; displayOrder: number }[],
+  companyId: string,
+  accountId: string,
+  yearMonth: string
+) {
+  await requireSession()
+  await verifyCompanyAccess(companyId)
+
+  await prisma.$transaction(
+    updates.map((u) =>
+      prisma.transaction.update({
+        where: { id: u.id },
+        data: { displayOrder: u.displayOrder },
+      })
+    )
+  )
+
+  await recalculateClosingBalance(companyId, accountId, yearMonth)
+  revalidatePath("/cashflow-table")
+  return { success: true }
 }

@@ -11,6 +11,7 @@ import { formatYen } from "@/lib/format"
 import {
   upsertDeductionDetails,
   getDeductionDetailsForTransaction,
+  copyPreviousDeductions,
 } from "@/app/actions/transactions"
 import { getDeductionCategories } from "@/app/actions/deduction-categories"
 
@@ -115,6 +116,20 @@ export function DeductionDetailsPanel({
 
   const removeRow = (index: number) => {
     setRows((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const handleCopyPrevious = async () => {
+    try {
+      const result = await copyPreviousDeductions(transactionId, companyId)
+      if (!result.found) {
+        alert("前月データなし")
+        return
+      }
+      setRows(result.deductions)
+    } catch (e) {
+      console.error("Failed to copy previous deductions:", e)
+      alert("前月データの取得に失敗しました")
+    }
   }
 
   const totalDeduction = rows.reduce((sum, r) => sum + (parseInt(r.amount) || 0), 0)
@@ -232,9 +247,14 @@ export function DeductionDetailsPanel({
             </Table>
 
             <div className="flex items-center justify-between">
-              <Button variant="outline" size="sm" onClick={addRow}>
-                行を追加
-              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={addRow}>
+                  行を追加
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleCopyPrevious}>
+                  前月からコピー
+                </Button>
+              </div>
               <div className="flex items-center gap-4 text-sm">
                 <div>
                   <Label className="text-muted-foreground">差額:</Label>

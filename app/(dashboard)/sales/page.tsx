@@ -23,10 +23,11 @@ import {
   type TransactionWithRelations,
 } from "@/app/actions/transactions"
 import { formatYen, getCurrentMonth, formatDate } from "@/lib/format"
+import { checkMonthClosed } from "@/app/actions/cashflow-table"
 import { DeductionDetailsPanel } from "@/components/deduction-details-panel"
 
 type Account = { id: string; bankName: string | null; branchName: string | null; accountNumber: string | null }
-type Partner = { id: string; name: string; type: string; tagKey: string; isActive: boolean }
+type Partner = { id: string; name: string; type: string; tagKey: string; isActive: boolean; defaults: { midId: string; subId: string | null }[] }
 type MidCategory = { id: string; name: string; majorId: string; isActive: boolean; subCategories: SubCategory[] }
 type SubCategory = { id: string; name: string; midId: string; isActive: boolean }
 type MajorCategory = { id: string; name: string; direction: string; isActive: boolean; midCategories: MidCategory[] }
@@ -63,6 +64,7 @@ export default function SalesPage() {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
   const [deductionTarget, setDeductionTarget] = useState<TransactionWithRelations | null>(null)
   const [deductionOpen, setDeductionOpen] = useState(false)
+  const [monthClosed, setMonthClosed] = useState(false)
 
   const [formAccountId, setFormAccountId] = useState("")
   const [formPartnerId, setFormPartnerId] = useState("")
@@ -87,11 +89,19 @@ export default function SalesPage() {
     return []
   }
 
+  const handlePartnerChange = (partnerId: string) => {
+    const partner = partners.find((p) => p.id === partnerId)
+    const defaults = partner?.defaults?.[0]
+    setFormPartnerId(partnerId)
+    if (defaults?.midId && !formMidId) setFormMidId(defaults.midId)
+    if (defaults?.subId && !formSubId) setFormSubId(defaults.subId)
+  }
+
   const loadData = useCallback(async () => {
     if (!selectedCompany) return
     setLoading(true)
     try {
-      const [accs, parts, cats, txns] = await Promise.all([
+      const [accs, parts, cats, txns, closed] = await Promise.all([
         getAccounts(selectedCompany.id),
         getPartners(selectedCompany.id),
         getCategories(),
@@ -101,9 +111,14 @@ export default function SalesPage() {
           filterMonth || undefined,
           filterStatus !== "ALL" ? (filterStatus as never) : undefined
         ),
+        filterMonth ? checkMonthClosed(selectedCompany.id, filterMonth) : Promise.resolve(false),
       ])
       setAccounts(accs.filter((a) => a.isActive).map((a) => ({ id: a.id, bankName: a.bankName, branchName: a.branchName, accountNumber: a.accountNumber })))
-      setPartners(parts.filter((p: Partner) => p.isActive && (p.type === "CUSTOMER" || p.type === "BOTH")))
+      setMonthClosed(closed)
+      setPartners(parts.filter((p: Partner) => p.isActive && (p.type === "CUSTOMER" || p.type === "BOTH")).map((p: Partner) => ({
+        ...p,
+        defaults: p.defaults?.map((d: { midId: string; subId: string | null }) => ({ midId: d.midId, subId: d.subId })) || [],
+      })))
       setCategories(cats as MajorCategory[])
       setTransactions(txns)
     } catch (e) {
@@ -290,12 +305,14 @@ export default function SalesPage() {
     )
   }
 
+  const amountFieldsDisabled = editingTransaction !== null && monthClosed
+
   const renderFormFields = (isPayment: boolean) => (
     <div className="grid gap-4 py-4">
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>口座</Label>
-          <Select value={formAccountId} onValueChange={setFormAccountId}>
+          <Select value={formAccountId} onValueChange={setFormAccountId} disabled={amountFieldsDisabled}>
             <SelectTrigger><SelectValue placeholder="口座を選択" /></SelectTrigger>
             <SelectContent>
               {accounts.map((a) => (
@@ -306,7 +323,7 @@ export default function SalesPage() {
         </div>
         <div className="space-y-2">
           <Label>取引先</Label>
-          <Select value={formPartnerId} onValueChange={setFormPartnerId}>
+          <Select value={formPartnerId} onValueChange={handlePartnerChange}>
             <SelectTrigger><SelectValue placeholder="取引先を選択" /></SelectTrigger>
             <SelectContent>
               {partners.map((p) => (
@@ -320,22 +337,22 @@ export default function SalesPage() {
         {!isPayment && (
           <div className="space-y-2">
             <Label>請求日</Label>
-            <Input type="date" value={formInvoiceDate} onChange={(e) => setFormInvoiceDate(e.target.value)} />
+            <Input type="date" value={formInvoiceDate} onChange={(e) => setFormInvoiceDate(e.target.value)} disabled={amountFieldsDisabled} />
           </div>
         )}
         <div className="space-y-2">
           <Label>{isPayment ? "入金日" : "予定入金日"}</Label>
-          <Input type="date" value={formTransactionDate} onChange={(e) => setFormTransactionDate(e.target.value)} />
+          <Input type="date" value={formTransactionDate} onChange={(e) => setFormTransactionDate(e.target.value)} disabled={amountFieldsDisabled} />
         </div>
         <div className="space-y-2">
           <Label>計上月</Label>
-          <Input type="month" value={formAccountingMonth} onChange={(e) => setFormAccountingMonth(e.target.value)} />
+          <Input type="month" value={formAccountingMonth} onChange={(e) => setFormAccountingMonth(e.target.value)} disabled={amountFieldsDisabled} />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label>金額</Label>
-          <Input type="number" placeholder="0" value={formAmount} onChange={(e) => setFormAmount(e.target.value)} />
+          <Input type="number" placeholder="0" value={formAmount} onChange={(e) => setFormAmount(e.target.value)} disabled={amountFieldsDisabled} />
         </div>
         <div className="space-y-2">
           <Label>勘定科目</Label>
@@ -468,6 +485,9 @@ export default function SalesPage() {
                                 <Button size="sm" variant="ghost" onClick={() => { setDeductionTarget(txn); setDeductionOpen(true) }}>控除</Button>
                                 <Button size="sm" variant="ghost" onClick={() => handleStatusChange(txn.id, "DRAFT")}>戻す</Button>
                               </>
+                            )}
+                            {monthClosed && txn.status !== "DRAFT" && (
+                              <Button size="sm" variant="ghost" onClick={() => openEditDialog(txn)}>摘要・科目編集</Button>
                             )}
                             {txn.status === "CONFIRMED" && (
                               <Button size="sm" variant="ghost" onClick={() => openPaymentDialog(txn)}>入金</Button>

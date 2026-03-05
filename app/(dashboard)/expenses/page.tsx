@@ -22,7 +22,10 @@ import {
   upsertTransactionDetails,
   type TransactionWithRelations,
 } from "@/app/actions/transactions"
+import { createFundTransfer, deleteFundTransfer } from "@/app/actions/fund-transfers"
+import { checkMonthClosed } from "@/app/actions/cashflow-table"
 import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
+import { Checkbox } from "@/components/ui/checkbox"
 import EvidencePanel from "@/components/evidence-panel"
 import { Paperclip } from "lucide-react"
 
@@ -31,6 +34,7 @@ type AccountOption = {
   bankName: string | null
   branchName: string | null
   accountNumber: string | null
+  isMain: boolean
 }
 
 type PartnerOption = {
@@ -103,6 +107,13 @@ export default function ExpensesPage() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [evidenceTargetId, setEvidenceTargetId] = useState<string | null>(null)
+  const [monthClosed, setMonthClosed] = useState(false)
+  const [createFundTransferFlag, setCreateFundTransferFlag] = useState(false)
+  const [fundTransferSourceId, setFundTransferSourceId] = useState("")
+  const [fundTransferDate, setFundTransferDate] = useState("")
+
+  const mainAccountId = accounts.find((a) => a.isMain)?.id || ""
+  const showFundTransferOption = form.accountId && form.accountId !== mainAccountId && !editingId
 
   const expenseMidCategories = categories
     .filter((m) => m.direction === "EXPENSE")
@@ -122,6 +133,7 @@ export default function ExpensesPage() {
       bankName: a.bankName,
       branchName: a.branchName,
       accountNumber: a.accountNumber,
+      isMain: a.isMain,
     })))
     setPartners(parts.filter((p) => p.isActive).map((p) => ({
       id: p.id,
@@ -135,8 +147,12 @@ export default function ExpensesPage() {
     setLoading(true)
     try {
       const statusFilter = filterStatus === "ALL" ? undefined : (filterStatus as "DRAFT" | "READY" | "CONFIRMED" | "CANCELLED")
-      const data = await getTransactions(companyId, "EXPENSE", filterMonth || undefined, statusFilter)
+      const [data, closed] = await Promise.all([
+        getTransactions(companyId, "EXPENSE", filterMonth || undefined, statusFilter),
+        filterMonth ? checkMonthClosed(companyId, filterMonth) : Promise.resolve(false),
+      ])
       setTransactions(data)
+      setMonthClosed(closed)
     } finally {
       setLoading(false)
     }
@@ -175,6 +191,9 @@ export default function ExpensesPage() {
     setForm(initialFormState)
     setEditingId(null)
     setDialogOpen(false)
+    setCreateFundTransferFlag(false)
+    setFundTransferSourceId("")
+    setFundTransferDate("")
   }
 
   const handleSubmit = async () => {
@@ -219,6 +238,19 @@ export default function ExpensesPage() {
             },
           ],
         })
+
+        // 原資の資金移動を自動作成
+        if (createFundTransferFlag && fundTransferSourceId && fundTransferDate) {
+          await createFundTransfer({
+            companyId: selectedCompany.id,
+            fromAccountId: fundTransferSourceId,
+            toAccountId: form.accountId,
+            transferDate: fundTransferDate,
+            amount: form.amount,
+            accountingMonth: form.accountingMonth,
+            summary: `経費原資移動: ${form.summary || "経費支払"}`,
+          })
+        }
       }
       resetForm()
       loadTransactions(selectedCompany.id)
@@ -286,13 +318,13 @@ export default function ExpensesPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{editingId ? "経費を編集" : "新規経費入力"}</DialogTitle>
+            <DialogTitle>{editingId ? "経費を編集" : "新規経費入力"}{editingId && monthClosed ? "（月締め中：摘要・科目のみ変更可）" : ""}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>口座 *</Label>
-                <Select value={form.accountId} onValueChange={(v) => setForm((p) => ({ ...p, accountId: v }))}>
+                <Select value={form.accountId} onValueChange={(v) => setForm((p) => ({ ...p, accountId: v }))} disabled={editingId !== null && monthClosed}>
                   <SelectTrigger><SelectValue placeholder="口座を選択" /></SelectTrigger>
                   <SelectContent>
                     {accounts.map((a) => (
@@ -318,15 +350,15 @@ export default function ExpensesPage() {
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>支払日</Label>
-                <Input type="date" value={form.transactionDate} onChange={(e) => setForm((p) => ({ ...p, transactionDate: e.target.value }))} />
+                <Input type="date" value={form.transactionDate} onChange={(e) => setForm((p) => ({ ...p, transactionDate: e.target.value }))} disabled={editingId !== null && monthClosed} />
               </div>
               <div className="space-y-2">
                 <Label>計上月 *</Label>
-                <Input type="month" value={form.accountingMonth} onChange={(e) => setForm((p) => ({ ...p, accountingMonth: e.target.value }))} />
+                <Input type="month" value={form.accountingMonth} onChange={(e) => setForm((p) => ({ ...p, accountingMonth: e.target.value }))} disabled={editingId !== null && monthClosed} />
               </div>
               <div className="space-y-2">
                 <Label>支払方法</Label>
-                <Select value={form.paymentMethod} onValueChange={(v) => setForm((p) => ({ ...p, paymentMethod: v as typeof form.paymentMethod }))}>
+                <Select value={form.paymentMethod} onValueChange={(v) => setForm((p) => ({ ...p, paymentMethod: v as typeof form.paymentMethod }))} disabled={editingId !== null && monthClosed}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="BANK_TRANSFER">振込</SelectItem>
@@ -339,7 +371,7 @@ export default function ExpensesPage() {
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label>金額 *</Label>
-                <Input type="number" placeholder="0" value={form.amount} onChange={(e) => setForm((p) => ({ ...p, amount: e.target.value }))} />
+                <Input type="number" placeholder="0" value={form.amount} onChange={(e) => setForm((p) => ({ ...p, amount: e.target.value }))} disabled={editingId !== null && monthClosed} />
               </div>
               <div className="space-y-2">
                 <Label>勘定科目（中項目） *</Label>
@@ -368,6 +400,42 @@ export default function ExpensesPage() {
               <Label>摘要</Label>
               <Input value={form.summary} onChange={(e) => setForm((p) => ({ ...p, summary: e.target.value }))} placeholder="メモ・摘要を入力" />
             </div>
+            {showFundTransferOption && (
+              <div className="border rounded-md p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="createFundTransfer"
+                    checked={createFundTransferFlag}
+                    onCheckedChange={(v) => {
+                      setCreateFundTransferFlag(!!v)
+                      if (v && !fundTransferSourceId) setFundTransferSourceId(mainAccountId)
+                    }}
+                  />
+                  <Label htmlFor="createFundTransfer">原資の資金移動を作成する</Label>
+                </div>
+                {createFundTransferFlag && (
+                  <div className="grid grid-cols-2 gap-4 pl-6">
+                    <div className="space-y-2">
+                      <Label>移動元口座</Label>
+                      <Select value={fundTransferSourceId} onValueChange={setFundTransferSourceId}>
+                        <SelectTrigger><SelectValue placeholder="口座を選択" /></SelectTrigger>
+                        <SelectContent>
+                          {accounts.filter((a) => a.id !== form.accountId).map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              {a.bankName} {a.branchName} {a.accountNumber}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>移動日</Label>
+                      <Input type="date" value={fundTransferDate} onChange={(e) => setFundTransferDate(e.target.value)} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={resetForm}>キャンセル</Button>
@@ -454,6 +522,9 @@ export default function ExpensesPage() {
                           )}
                           {tx.status === "READY" && (
                             <Button variant="ghost" size="sm" onClick={() => handleStatusChange(tx.id, "DRAFT")}>差戻し</Button>
+                          )}
+                          {monthClosed && tx.status !== "DRAFT" && (
+                            <Button variant="ghost" size="sm" onClick={() => handleEdit(tx)}>摘要・科目編集</Button>
                           )}
                         </div>
                       </TableCell>

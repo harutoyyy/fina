@@ -19,10 +19,29 @@ import {
   reopenMonth,
   deferTransaction,
   deferTransactionsBatch,
+  reorderTransactions,
   type CashFlowTableData,
+  type CashFlowRow,
 } from "@/app/actions/cashflow-table"
 import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
-import { Printer } from "lucide-react"
+import { Printer, GripVertical } from "lucide-react"
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 
 type AccountOption = {
   id: string
@@ -59,6 +78,112 @@ const CLASSIFICATION_LABELS: Record<string, string> = {
   FIXED: "固定",
   VARIABLE: "変動",
   TEMPORARY: "臨時",
+}
+
+function SortableRow({
+  row,
+  isClosed,
+  selectedRows,
+  toggleRowSelection,
+  handleDeferSingle,
+  deferLoading,
+}: {
+  row: CashFlowRow
+  isClosed: boolean
+  selectedRows: Set<string>
+  toggleRowSelection: (id: string) => void
+  handleDeferSingle: (id: string) => void
+  deferLoading: boolean
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: row.id })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  }
+
+  const deposit = Number(row.deposit)
+  const withdrawal = Number(row.withdrawal)
+  const detail = row.details[0]
+  const categoryDisplay = detail
+    ? [detail.midName, detail.subName].filter(Boolean).join(" / ")
+    : "—"
+  const canDefer = row.status !== "CONFIRMED"
+
+  return (
+    <TableRow ref={setNodeRef} style={style}>
+      <TableCell className="w-8 cursor-grab" {...attributes} {...listeners}>
+        <GripVertical className="h-4 w-4 text-muted-foreground" />
+      </TableCell>
+      {!isClosed && (
+        <TableCell>
+          <Checkbox
+            checked={selectedRows.has(row.id)}
+            onCheckedChange={() => toggleRowSelection(row.id)}
+            disabled={!canDefer}
+          />
+        </TableCell>
+      )}
+      <TableCell className="whitespace-nowrap">
+        {row.transactionDate ? formatDate(row.transactionDate) : "—"}
+      </TableCell>
+      <TableCell className="whitespace-nowrap">
+        {row.scheduledDate ? formatDate(row.scheduledDate) : "—"}
+      </TableCell>
+      <TableCell>
+        <Badge variant="outline">
+          {TYPE_LABELS[row.type] || row.type}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        {row.classification ? CLASSIFICATION_LABELS[row.classification] || row.classification : "—"}
+      </TableCell>
+      <TableCell>{row.partnerName || "—"}</TableCell>
+      <TableCell className="text-right font-mono text-green-600">
+        {deposit > 0 ? formatYen(deposit) : ""}
+      </TableCell>
+      <TableCell className="text-right font-mono text-red-600">
+        {withdrawal < 0 ? formatYen(Math.abs(withdrawal)) : ""}
+      </TableCell>
+      <TableCell className="text-right font-mono font-medium">
+        {formatYen(Number(row.runningBalance))}
+      </TableCell>
+      <TableCell className="max-w-[200px] truncate">{row.summary || "—"}</TableCell>
+      <TableCell className="text-sm">{categoryDisplay}</TableCell>
+      <TableCell className="text-right font-mono">
+        {row.details.length > 1
+          ? formatYen(
+              row.details.reduce((sum, d) => sum + Number(d.amount), 0) - Number(row.amount)
+            )
+          : "—"}
+      </TableCell>
+      <TableCell>
+        <Badge variant={STATUS_VARIANTS[row.status] || "outline"}>
+          {STATUS_LABELS[row.status] || row.status}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        {!isClosed && canDefer && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleDeferSingle(row.id)}
+            disabled={deferLoading}
+          >
+            繰延
+          </Button>
+        )}
+      </TableCell>
+    </TableRow>
+  )
 }
 
 export default function CashFlowTablePage() {
@@ -213,6 +338,43 @@ export default function CashFlowTablePage() {
       alert(e instanceof Error ? e.message : "繰り延べに失敗しました")
     } finally {
       setDeferLoading(false)
+    }
+  }
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id || !selectedCompany || !tableData) return
+
+    const oldIndex = filteredRows.findIndex((r) => r.id === active.id)
+    const newIndex = filteredRows.findIndex((r) => r.id === over.id)
+    if (oldIndex === -1 || newIndex === -1) return
+
+    const reordered = arrayMove(filteredRows, oldIndex, newIndex)
+    const updates = reordered.map((r, i) => ({ id: r.id, displayOrder: i }))
+
+    // Optimistic update: recalculate running balances
+    const openBal = Number(tableData.openingBalance)
+    let running = openBal
+    const updatedRows = reordered.map((r) => {
+      const amt = Number(r.amount)
+      running += amt
+      return { ...r, runningBalance: running.toString() }
+    })
+    setTableData((prev) =>
+      prev ? { ...prev, rows: updatedRows } : prev
+    )
+
+    try {
+      await reorderTransactions(updates, selectedCompany.id, selectedAccountId, selectedMonth)
+      await loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
+    } catch (e) {
+      console.error("Failed to reorder:", e)
+      await loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
     }
   }
 
@@ -406,109 +568,51 @@ export default function CashFlowTablePage() {
             <p className="text-muted-foreground text-center py-8">取引データがありません</p>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {!isClosed && (
-                      <TableHead className="w-8">
-                        <Checkbox
-                          checked={selectedRows.size > 0 && selectedRows.size === filteredRows.filter(r => r.status !== "CONFIRMED").length}
-                          onCheckedChange={() => toggleAllRows()}
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8"></TableHead>
+                      {!isClosed && (
+                        <TableHead className="w-8">
+                          <Checkbox
+                            checked={selectedRows.size > 0 && selectedRows.size === filteredRows.filter(r => r.status !== "CONFIRMED").length}
+                            onCheckedChange={() => toggleAllRows()}
+                          />
+                        </TableHead>
+                      )}
+                      <TableHead className="whitespace-nowrap">実出納日</TableHead>
+                      <TableHead className="whitespace-nowrap">予定日</TableHead>
+                      <TableHead className="whitespace-nowrap">取引種別</TableHead>
+                      <TableHead className="whitespace-nowrap">固定/変動</TableHead>
+                      <TableHead className="whitespace-nowrap">取引先</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">入金額</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">支払額</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">差引残高</TableHead>
+                      <TableHead className="whitespace-nowrap">摘要</TableHead>
+                      <TableHead className="whitespace-nowrap">中項目/小項目</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">差額</TableHead>
+                      <TableHead className="whitespace-nowrap">ステータス</TableHead>
+                      <TableHead className="whitespace-nowrap">操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <SortableContext items={filteredRows.map((r) => r.id)} strategy={verticalListSortingStrategy}>
+                    <TableBody>
+                      {filteredRows.map((row) => (
+                        <SortableRow
+                          key={row.id}
+                          row={row}
+                          isClosed={isClosed}
+                          selectedRows={selectedRows}
+                          toggleRowSelection={toggleRowSelection}
+                          handleDeferSingle={handleDeferSingle}
+                          deferLoading={deferLoading}
                         />
-                      </TableHead>
-                    )}
-                    <TableHead className="whitespace-nowrap">実出納日</TableHead>
-                    <TableHead className="whitespace-nowrap">予定日</TableHead>
-                    <TableHead className="whitespace-nowrap">取引種別</TableHead>
-                    <TableHead className="whitespace-nowrap">固定/変動</TableHead>
-                    <TableHead className="whitespace-nowrap">取引先</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">入金額</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">支払額</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">差引残高</TableHead>
-                    <TableHead className="whitespace-nowrap">摘要</TableHead>
-                    <TableHead className="whitespace-nowrap">中項目/小項目</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">差額</TableHead>
-                    <TableHead className="whitespace-nowrap">ステータス</TableHead>
-                    <TableHead className="whitespace-nowrap">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredRows.map((row) => {
-                    const deposit = Number(row.deposit)
-                    const withdrawal = Number(row.withdrawal)
-                    const estimatedDiff = row.amount !== "0" ? "" : ""
-                    const detail = row.details[0]
-                    const categoryDisplay = detail
-                      ? [detail.midName, detail.subName].filter(Boolean).join(" / ")
-                      : "—"
-
-                    const canDefer = row.status !== "CONFIRMED"
-                    return (
-                      <TableRow key={row.id}>
-                        {!isClosed && (
-                          <TableCell>
-                            <Checkbox
-                              checked={selectedRows.has(row.id)}
-                              onCheckedChange={() => toggleRowSelection(row.id)}
-                              disabled={!canDefer}
-                            />
-                          </TableCell>
-                        )}
-                        <TableCell className="whitespace-nowrap">
-                          {row.transactionDate ? formatDate(row.transactionDate) : "—"}
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap">
-                          {row.scheduledDate ? formatDate(row.scheduledDate) : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">
-                            {TYPE_LABELS[row.type] || row.type}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {row.classification ? CLASSIFICATION_LABELS[row.classification] || row.classification : "—"}
-                        </TableCell>
-                        <TableCell>{row.partnerName || "—"}</TableCell>
-                        <TableCell className="text-right font-mono text-green-600">
-                          {deposit > 0 ? formatYen(deposit) : ""}
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-red-600">
-                          {withdrawal < 0 ? formatYen(Math.abs(withdrawal)) : ""}
-                        </TableCell>
-                        <TableCell className="text-right font-mono font-medium">
-                          {formatYen(Number(row.runningBalance))}
-                        </TableCell>
-                        <TableCell className="max-w-[200px] truncate">{row.summary || "—"}</TableCell>
-                        <TableCell className="text-sm">{categoryDisplay}</TableCell>
-                        <TableCell className="text-right font-mono">
-                          {row.details.length > 1
-                            ? formatYen(
-                                row.details.reduce((sum, d) => sum + Number(d.amount), 0) - Number(row.amount)
-                              )
-                            : "—"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={STATUS_VARIANTS[row.status] || "outline"}>
-                            {STATUS_LABELS[row.status] || row.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {!isClosed && canDefer && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeferSingle(row.id)}
-                              disabled={deferLoading}
-                            >
-                              繰延
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
+                      ))}
+                    </TableBody>
+                  </SortableContext>
+                </Table>
+              </DndContext>
             </div>
           )}
         </CardContent>

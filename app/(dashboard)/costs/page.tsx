@@ -14,6 +14,7 @@ import { getAccounts } from "@/app/actions/accounts"
 import { getPartners } from "@/app/actions/partners"
 import { getTransactions, createTransaction, updateTransaction, updateTransactionStatus, deleteTransaction, type TransactionWithRelations } from "@/app/actions/transactions"
 import { formatYen, getCurrentMonth, formatDate } from "@/lib/format"
+import { checkMonthClosed } from "@/app/actions/cashflow-table"
 import { DeductionDetailsPanel } from "@/components/deduction-details-panel"
 
 type AccountOption = { id: string; bankName: string | null; branchName: string | null; accountNumber: string | null }
@@ -85,12 +86,13 @@ export default function CostsPage() {
   const [form, setForm] = useState<CostFormData>(emptyForm)
   const [deductionTarget, setDeductionTarget] = useState<TransactionWithRelations | null>(null)
   const [deductionOpen, setDeductionOpen] = useState(false)
+  const [monthClosed, setMonthClosed] = useState(false)
 
   const loadData = useCallback(async () => {
     if (!selectedCompany) return
     setLoading(true)
     try {
-      const [accts, ptns, txns] = await Promise.all([
+      const [accts, ptns, txns, closed] = await Promise.all([
         getAccounts(selectedCompany.id),
         getPartners(selectedCompany.id),
         getTransactions(
@@ -99,9 +101,11 @@ export default function CostsPage() {
           filterMonth || undefined,
           filterStatus !== "ALL" ? (filterStatus as "DRAFT" | "READY" | "CONFIRMED" | "CANCELLED") : undefined
         ),
+        filterMonth ? checkMonthClosed(selectedCompany.id, filterMonth) : Promise.resolve(false),
       ])
       setAccounts(accts.map((a) => ({ id: a.id, bankName: a.bankName, branchName: a.branchName, accountNumber: a.accountNumber })))
       setPartners(ptns.map((p) => ({ id: p.id, name: p.name })))
+      setMonthClosed(closed)
       setTransactions(txns)
     } catch (e) {
       console.error("Failed to load data", e)
@@ -334,7 +338,10 @@ export default function CostsPage() {
                               <Button variant="ghost" size="sm" onClick={() => handleStatusChange(txn.id, "CONFIRMED")}>確定</Button>
                             </>
                           )}
-                          {txn.status === "CONFIRMED" && (
+                          {monthClosed && txn.status !== "DRAFT" && (
+                            <Button variant="ghost" size="sm" onClick={() => openEditDialog(txn)}>摘要編集</Button>
+                          )}
+                          {txn.status === "CONFIRMED" && !monthClosed && (
                             <span className="text-xs text-muted-foreground">確定済</span>
                           )}
                         </div>
@@ -351,14 +358,14 @@ export default function CostsPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{editingId ? "原価支払を編集" : "原価支払を登録"}</DialogTitle>
+            <DialogTitle>{editingId ? "原価支払を編集" : "原価支払を登録"}{editingId && monthClosed ? "（月締め中：摘要のみ変更可）" : ""}</DialogTitle>
             <DialogDescription>工事原価の支払い情報を入力してください</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>口座</Label>
-                <Select value={form.accountId} onValueChange={(v) => setForm((f) => ({ ...f, accountId: v }))}>
+                <Select value={form.accountId} onValueChange={(v) => setForm((f) => ({ ...f, accountId: v }))} disabled={editingId !== null && monthClosed}>
                   <SelectTrigger>
                     <SelectValue placeholder="口座を選択" />
                   </SelectTrigger>
@@ -391,6 +398,7 @@ export default function CostsPage() {
                   type="date"
                   value={form.transactionDate}
                   onChange={(e) => setForm((f) => ({ ...f, transactionDate: e.target.value }))}
+                  disabled={editingId !== null && monthClosed}
                 />
               </div>
               <div className="space-y-1">
@@ -399,6 +407,7 @@ export default function CostsPage() {
                   type="month"
                   value={form.accountingMonth}
                   onChange={(e) => setForm((f) => ({ ...f, accountingMonth: e.target.value }))}
+                  disabled={editingId !== null && monthClosed}
                 />
               </div>
             </div>
@@ -412,6 +421,7 @@ export default function CostsPage() {
                     type="number"
                     value={form.laborCost}
                     onChange={(e) => setForm((f) => ({ ...f, laborCost: e.target.value }))}
+                    disabled={editingId !== null && monthClosed}
                   />
                 </div>
                 <div className="space-y-1">
@@ -420,6 +430,7 @@ export default function CostsPage() {
                     type="number"
                     value={form.welfareCost}
                     onChange={(e) => setForm((f) => ({ ...f, welfareCost: e.target.value }))}
+                    disabled={editingId !== null && monthClosed}
                   />
                 </div>
                 <div className="space-y-1">
@@ -428,6 +439,7 @@ export default function CostsPage() {
                     type="number"
                     value={form.materialCost}
                     onChange={(e) => setForm((f) => ({ ...f, materialCost: e.target.value }))}
+                    disabled={editingId !== null && monthClosed}
                   />
                 </div>
                 <div className="space-y-1">
@@ -436,6 +448,7 @@ export default function CostsPage() {
                     type="number"
                     value={form.taxAmount}
                     onChange={(e) => setForm((f) => ({ ...f, taxAmount: e.target.value }))}
+                    disabled={editingId !== null && monthClosed}
                   />
                 </div>
               </div>
@@ -453,6 +466,7 @@ export default function CostsPage() {
                     type="number"
                     value={form.actualPayment}
                     onChange={(e) => setForm((f) => ({ ...f, actualPayment: e.target.value }))}
+                    disabled={editingId !== null && monthClosed}
                   />
                 </div>
                 <div className="space-y-1">

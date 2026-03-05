@@ -401,6 +401,93 @@ const validTransitions: Record<string, string[]> = {
   CONFIRMED: [],
 }
 
+function reserveSummary(type: "社保" | "消費税", payMonth: string, groupName: string) {
+  return `給与積立（${type}）${payMonth} ${groupName}`
+}
+
+async function createReserveTransfer(
+  companyId: string,
+  fromAccountId: string,
+  toAccountId: string,
+  amount: bigint,
+  accountingMonth: string,
+  summary: string
+) {
+  const outTx = await prisma.transaction.create({
+    data: {
+      companyId,
+      accountId: fromAccountId,
+      type: "TRANSFER",
+      accountingMonth,
+      amount: -amount,
+      summary: summary + "（出金）",
+    },
+  })
+
+  const inTx = await prisma.transaction.create({
+    data: {
+      companyId,
+      accountId: toAccountId,
+      type: "TRANSFER",
+      accountingMonth,
+      amount,
+      summary: summary + "（入金）",
+      linkedTransactionId: outTx.id,
+    },
+  })
+
+  await prisma.transaction.update({
+    where: { id: outTx.id },
+    data: { linkedTransactionId: inTx.id },
+  })
+
+  await prisma.fundTransfer.create({
+    data: {
+      transactionId: outTx.id,
+      fromAccountId,
+      toAccountId,
+      transferDate: new Date(),
+      amount,
+    },
+  })
+
+  return { outTx, inTx }
+}
+
+async function findReserveTransactions(companyId: string, payMonth: string, groupName: string) {
+  return prisma.transaction.findMany({
+    where: {
+      companyId,
+      type: "TRANSFER",
+      accountingMonth: payMonth,
+      summary: { startsWith: "給与積立", contains: groupName },
+    },
+    include: { fundTransfer: true },
+  })
+}
+
+async function deleteReserveTransactions(companyId: string, payMonth: string, groupName: string) {
+  const reserves = await findReserveTransactions(companyId, payMonth, groupName)
+  for (const tx of reserves) {
+    if (tx.fundTransfer) {
+      await prisma.fundTransfer.delete({ where: { id: tx.fundTransfer.id } })
+    }
+    if (tx.linkedTransactionId) {
+      const linked = await prisma.transaction.findUnique({
+        where: { id: tx.linkedTransactionId },
+        include: { fundTransfer: true },
+      })
+      if (linked?.fundTransfer) {
+        await prisma.fundTransfer.delete({ where: { id: linked.fundTransfer.id } })
+      }
+      if (linked) {
+        await prisma.transaction.delete({ where: { id: linked.id } })
+      }
+    }
+    await prisma.transaction.delete({ where: { id: tx.id } })
+  }
+}
+
 export async function updateSalaryStatus(
   id: string,
   companyId: string,
@@ -411,7 +498,7 @@ export async function updateSalaryStatus(
   const existing = await prisma.salaryEntry.findUnique({
     where: { id },
     include: {
-      payrollGroup: { select: { companyId: true } },
+      payrollGroup: { select: { companyId: true, name: true } },
       deductions: true,
       paymentDetails: true,
     },
@@ -437,6 +524,55 @@ export async function updateSalaryStatus(
     }
   }
 
+  // 積立自動反映
+  if (status === "READY") {
+    const groupName = existing.payrollGroup.name
+
+    // 既存の積立取引を削除（再READY時の金額更新対応）
+    await deleteReserveTransactions(companyId, existing.payMonth, groupName)
+
+    // メイン口座と仮想口座を取得
+    const company = await prisma.company.findUnique({ where: { id: companyId } })
+    const mainAccount = company?.mainAccountId
+      ? await prisma.account.findUnique({ where: { id: company.mainAccountId } })
+      : await prisma.account.findFirst({ where: { companyId, isMain: true } })
+
+    const socialInsuranceAccount = await prisma.account.findFirst({
+      where: { companyId, accountType: "SOCIAL_INSURANCE_RESERVE" },
+    })
+    const consumptionTaxAccount = await prisma.account.findFirst({
+      where: { companyId, accountType: "CONSUMPTION_TAX_RESERVE" },
+    })
+
+    if (mainAccount) {
+      if (socialInsuranceAccount && existing.socialInsuranceReserve > BigInt(0)) {
+        await createReserveTransfer(
+          companyId,
+          mainAccount.id,
+          socialInsuranceAccount.id,
+          existing.socialInsuranceReserve,
+          existing.payMonth,
+          reserveSummary("社保", existing.payMonth, groupName)
+        )
+      }
+      if (consumptionTaxAccount && existing.consumptionTaxReserve > BigInt(0)) {
+        await createReserveTransfer(
+          companyId,
+          mainAccount.id,
+          consumptionTaxAccount.id,
+          existing.consumptionTaxReserve,
+          existing.payMonth,
+          reserveSummary("消費税", existing.payMonth, groupName)
+        )
+      }
+    }
+  }
+
+  // DRAFT に戻す場合、積立取引を削除
+  if (status === "DRAFT" && existing.status === "READY") {
+    await deleteReserveTransactions(companyId, existing.payMonth, existing.payrollGroup.name)
+  }
+
   const updateData: Record<string, unknown> = { status }
 
   if (status === "CONFIRMED") {
@@ -451,6 +587,7 @@ export async function updateSalaryStatus(
   })
 
   revalidatePath("/salary")
+  revalidatePath("/cashflow-table")
   return bigintToJson(result)
 }
 
