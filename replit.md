@@ -36,12 +36,12 @@ app/
   (dashboard)/sales/        - Sales input (parent-child)
   (dashboard)/costs/        - Cost payment input
   (dashboard)/salary/       - Salary/payroll input
-  (dashboard)/loans/        - Loan management (placeholder)
-  (dashboard)/leases/       - Lease management (placeholder)
-  (dashboard)/recurring/    - Recurring templates (placeholder)
+  (dashboard)/loans/        - Loan contract management
+  (dashboard)/leases/       - Lease contract management
+  (dashboard)/recurring/    - Recurring payment templates
   api/auth/[...all]/        - Better Auth API routes
   api/companies/            - Companies API
-  actions/                  - Server Actions (companies, accounts, partners, categories)
+  actions/                  - Server Actions (companies, accounts, partners, categories, transactions, fund-transfers, payroll, cashflow-table, loans, leases, recurring)
   layout.tsx                - Root layout
   page.tsx                  - Home (redirects to /dashboard)
   globals.css               - Global styles + shadcn CSS variables
@@ -125,4 +125,10 @@ docs/
   - app/actions/cashflow-table.ts: Cash flow data retrieval, monthly balance CRUD, month close/reopen
   - /cashflow-table: Cash flow table view (company×account×month), summary cards, filters, running balance
   - /monthly-close: Monthly closing management (close/reopen with reason), balance settings per account
-- Phase 5 (Advanced): TODO - Loan/lease management, recurring templates
+- Phase 5 (Advanced): COMPLETE - Loan/lease management, recurring templates
+  - app/actions/loans.ts: LoanContract CRUD, repayment schedule auto-generation (equal principal/bullet/grace), paid marking, schedule regeneration
+  - app/actions/leases.ts: LeaseContract CRUD, payment schedule auto-generation, paid marking
+  - app/actions/recurring.ts: RecurringTemplate CRUD, monthly transaction auto-generation with frequency logic
+  - /loans: Loan contract list, creation with repayment schedule, detail view, schedule paid marking
+  - /leases: Lease contract list, creation with payment schedule, detail view, schedule paid marking
+  - /recurring: Template list, creation with frequency/amount settings, monthly batch generation
