@@ -18,6 +18,9 @@ import {
   Repeat,
   BookOpen,
   Settings,
+  CalendarCheck,
+  TableProperties,
+  ArrowRightLeft,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { CompanySwitcher } from "@/components/company-switcher"
@@ -25,7 +28,8 @@ import { Separator } from "@/components/ui/separator"
 
 const navigation = [
   { name: "ダッシュボード", href: "/dashboard", icon: LayoutDashboard },
-  { name: "資金繰り表", href: "/cashflow", icon: FileText },
+  { name: "資金繰り表", href: "/cashflow-table", icon: TableProperties },
+  { name: "資金移動", href: "/cashflow", icon: ArrowRightLeft },
 ]
 
 const inputNavigation = [
@@ -39,6 +43,7 @@ const managementNavigation = [
   { name: "借入管理", href: "/loans", icon: Landmark },
   { name: "リース管理", href: "/leases", icon: Repeat },
   { name: "定期テンプレート", href: "/recurring", icon: BookOpen },
+  { name: "月次処理", href: "/monthly-close", icon: CalendarCheck },
 ]
 
 const masterNavigation = [

@@ -5,6 +5,7 @@ import { requireSession } from "@/lib/auth-server"
 import { TransactionType, TransactionStatus, PaymentMethod } from "@prisma/client"
 import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
+import { ensureMonthOpen } from "@/app/actions/cashflow-table"
 
 export type TransactionWithRelations = {
   id: string
@@ -136,6 +137,7 @@ export async function createTransaction(data: {
   }[]
 }) {
   await requireSession()
+  await ensureMonthOpen(data.companyId, data.accountingMonth)
 
   const result = await prisma.transaction.create({
     data: {
@@ -202,6 +204,7 @@ export async function updateTransaction(
   if (existing.status !== "DRAFT") {
     throw new Error("Only DRAFT transactions can be edited")
   }
+  await ensureMonthOpen(companyId, existing.accountingMonth)
 
   const updateData: Record<string, unknown> = {}
   if (data.accountId !== undefined) updateData.accountId = data.accountId
@@ -284,6 +287,7 @@ export async function deleteTransaction(id: string, companyId: string) {
   if (existing.status !== "DRAFT") {
     throw new Error("Only DRAFT transactions can be deleted")
   }
+  await ensureMonthOpen(companyId, existing.accountingMonth)
 
   await prisma.transaction.delete({ where: { id } })
   revalidatePath("/expenses")

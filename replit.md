@@ -30,6 +30,8 @@ app/
     categories/             - Account category management (3-level)
     settings/               - System settings (placeholder)
   (dashboard)/cashflow/     - Fund transfer input
+  (dashboard)/cashflow-table/ - Cash flow table view
+  (dashboard)/monthly-close/  - Monthly closing management
   (dashboard)/expenses/     - Expense input
   (dashboard)/sales/        - Sales input (parent-child)
   (dashboard)/costs/        - Cost payment input
@@ -119,5 +121,8 @@ docs/
   - app/actions/payroll.ts: PayrollGroup CRUD, SalaryEntry CRUD, deductions, payment details, status flow
   - /master/payroll-groups: Payroll group master management (name, cost type, pay day, accounts, headcount)
   - /salary: Salary entry input with auto-calculation (social insurance 15%, consumption tax 10%), deductions, payment details, status workflow
-- Phase 4 (Reports): TODO - Cash flow table, monthly closing
+- Phase 4 (Reports): COMPLETE - Cash flow table, monthly closing
+  - app/actions/cashflow-table.ts: Cash flow data retrieval, monthly balance CRUD, month close/reopen
+  - /cashflow-table: Cash flow table view (company×account×month), summary cards, filters, running balance
+  - /monthly-close: Monthly closing management (close/reopen with reason), balance settings per account
 - Phase 5 (Advanced): TODO - Loan/lease management, recurring templates
