@@ -130,9 +130,10 @@ docs/
   - /cashflow-table: Cash flow table view (company×account×month), summary cards, filters, running balance
   - /monthly-close: Monthly closing management (close/reopen with reason), balance settings per account
 - Phase 5 (Advanced): COMPLETE - Loan/lease management, recurring templates
-  - app/actions/loans.ts: LoanContract CRUD, repayment schedule auto-generation (equal principal/bullet/grace), paid marking, schedule regeneration
-  - app/actions/leases.ts: LeaseContract CRUD, payment schedule auto-generation, paid marking
-  - app/actions/recurring.ts: RecurringTemplate CRUD, monthly transaction auto-generation with frequency logic
+  - app/actions/loans.ts: LoanContract CRUD, repayment schedule auto-generation (equal principal/bullet/grace), paid marking, schedule regeneration. Validates totalPayments > 0.
+  - app/actions/leases.ts: LeaseContract CRUD, payment schedule auto-generation, paid marking, schedule regeneration
+  - app/actions/recurring.ts: RecurringTemplate CRUD, monthly transaction auto-generation with frequency logic (MONTHLY/BIMONTHLY/QUARTERLY/YEARLY/SPECIFIC_MONTHS), duplicate prevention via lastGeneratedMonth, variable amount copies from previous month
   - /loans: Loan contract list, creation with repayment schedule, detail view, schedule paid marking
-  - /leases: Lease contract list, creation with payment schedule, detail view, schedule paid marking
+  - /leases: Lease contract list, creation with payment schedule, detail view, schedule paid marking, regeneration
   - /recurring: Template list, creation with frequency/amount settings, monthly batch generation
+- Step 1 (基盤強化): COMPLETE - Audit logging, bank master, deduction categories, partner bank accounts/sites with companyId ownership verification

@@ -189,6 +189,10 @@ export async function createLoan(data: {
 }) {
   await requireSession()
 
+  if (!data.totalPayments || data.totalPayments <= 0) {
+    throw new Error("返済回数は1以上を指定してください")
+  }
+
   const principalAmount = BigInt(data.principalAmount)
   const executionDate = new Date(data.executionDate)
   const repaymentStartDate = new Date(data.repaymentStartDate)
