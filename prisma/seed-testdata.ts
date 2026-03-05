@@ -102,6 +102,7 @@ async function main() {
 
   // 月次残高（サブ口座・前月分も）
   await prisma.monthlyBalance.createMany({
+    skipDuplicates: true,
     data: [
       { companyId: okoshi.id, accountId: subAccount.id, yearMonth: '2026-03', openingBalance: BigInt(2000000), closingBalance: BigInt(2000000) },
       { companyId: okoshi.id, accountId: mainAccount.id, yearMonth: '2026-02', openingBalance: BigInt(4500000), closingBalance: BigInt(5000000) },
