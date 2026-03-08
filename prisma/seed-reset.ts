@@ -287,11 +287,7 @@ async function seedTestData(refs: Awaited<ReturnType<typeof seedMaster>>) {
 
   // Reload mid categories with subs
   const mids = await prisma.accountCategoryMid.findMany({ include: { subCategories: true } });
-  const findMidFull = (name: string) => {
-    const ref = refs[name as keyof typeof refs]
-    const refId = typeof ref === "string" ? ref : (ref && typeof ref === "object" && "id" in ref ? (ref as { id: string }).id : undefined)
-    return mids.find(m => m.id === refId)
-  }
+  const findMidFull = (name: string) => mids.find(m => m.id === refs[name as keyof typeof refs])
   const リース料Full = mids.find(m => m.id === リース料.id)!;
 
   // --- サブ口座 ---

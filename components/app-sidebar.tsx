@@ -25,12 +25,6 @@ import {
   MinusCircle,
   Inbox,
   Banknote,
-  BarChart3,
-  DollarSign,
-  PieChart,
-  Wrench,
-  Wallet,
-  FileBarChart,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { CompanySwitcher } from "@/components/company-switcher"
@@ -56,15 +50,6 @@ const managementNavigation = [
   { name: "リース管理", href: "/leases", icon: Repeat },
   { name: "定期テンプレート", href: "/recurring", icon: BookOpen },
   { name: "月次処理", href: "/monthly-close", icon: CalendarCheck },
-]
-
-const groupNavigation = [
-  { name: "全社概要", href: "/group", icon: BarChart3 },
-  { name: "売上分析", href: "/group/sales", icon: DollarSign },
-  { name: "経費分析", href: "/group/expenses", icon: PieChart },
-  { name: "原価分析", href: "/group/cost", icon: Wrench },
-  { name: "給与分析", href: "/group/salary", icon: Wallet },
-  { name: "借入・リース", href: "/group/loans", icon: FileBarChart },
 ]
 
 const masterNavigation = [
@@ -122,11 +107,6 @@ export function AppSidebar() {
         <Separator className="my-3" />
         <p className="px-3 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">管理</p>
         {managementNavigation.map((item) => (
-          <NavItem key={item.href} item={item} pathname={pathname} />
-        ))}
-        <Separator className="my-3" />
-        <p className="px-3 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">全社管理</p>
-        {groupNavigation.map((item) => (
           <NavItem key={item.href} item={item} pathname={pathname} />
         ))}
         <Separator className="my-3" />

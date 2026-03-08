@@ -276,7 +276,7 @@ export default function CashWithdrawalPage() {
                     <TableBody>
                       {batch.linkedTransactions.map((tx) => (
                         <TableRow key={tx.id}>
-                          <TableCell>{tx.transactionDate ? new Date(tx.transactionDate).toLocaleDateString("ja-JP") : "—"}</TableCell>
+                          <TableCell>{new Date(tx.transactionDate).toLocaleDateString("ja-JP")}</TableCell>
                           <TableCell>{tx.partner?.name || "—"}</TableCell>
                           <TableCell>{tx.summary || "—"}</TableCell>
                           <TableCell className="text-right font-mono">{formatYen(Number(tx.amount))}</TableCell>

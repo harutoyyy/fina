@@ -35,8 +35,7 @@ export async function uploadEvidence(transactionId: string, data: {
   mimeType: string
 }) {
   const tx = await getTransactionWithCompany(transactionId)
-  await verifyCompanyAccess(tx.companyId)
-  const session = await requireSession()
+  const session = await verifyCompanyAccess(tx.companyId)
 
   const mockUrl = `/uploads/mock/${transactionId}/${Date.now()}_${data.fileName}`
 
