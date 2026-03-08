@@ -186,7 +186,8 @@ export async function suggestDenomination(amount: number) {
 
 export async function confirmCashWithdrawalBatch(batchId: string) {
   const batchMeta = await getBatchWithCompany(batchId)
-  const session = await verifyCompanyAccess(batchMeta.companyId)
+  await verifyCompanyAccess(batchMeta.companyId)
+  const session = await requireSession()
 
   const batch = await prisma.cashWithdrawalBatch.findUnique({
     where: { id: batchId },
