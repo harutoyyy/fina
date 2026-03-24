@@ -426,19 +426,53 @@ export default function CashFlowTablePage() {
     const { active, over } = event
     if (!over || active.id === over.id || !selectedCompany || !tableData) return
 
-    const oldIndex = filteredRows.findIndex((r) => r.id === active.id)
-    const newIndex = filteredRows.findIndex((r) => r.id === over.id)
-    if (oldIndex === -1 || newIndex === -1) return
+    const draggedId = active.id as string
+    // ドラッグした行がチェック済みなら、チェック済み行を全てまとめて移動
+    const movedIds = selectedRows.has(draggedId)
+      ? new Set(selectedRows)
+      : new Set([draggedId])
 
-    const reordered = arrayMove(filteredRows, oldIndex, newIndex)
+    const rows = [...filteredRows]
+    const targetIndex = rows.findIndex((r) => r.id === over.id)
+    if (targetIndex === -1) return
+
+    // 移動対象の行と残りの行を分離
+    const moved: CashFlowRow[] = []
+    const rest: CashFlowRow[] = []
+    rows.forEach((r) => {
+      if (movedIds.has(r.id)) moved.push(r)
+      else rest.push(r)
+    })
+
+    // ドロップ先の行が rest 内の何番目かを計算して挿入位置を決定
+    const overRow = rows.find((r) => r.id === over.id)!
+    let insertPos = rest.indexOf(overRow)
+    if (insertPos === -1) {
+      // ドロップ先もmovedに含まれる場合、元のtargetIndex前後の非移動行を基準にする
+      insertPos = rest.length
+      for (let i = targetIndex + 1; i < rows.length; i++) {
+        const idx = rest.indexOf(rows[i])
+        if (idx !== -1) { insertPos = idx; break }
+      }
+    } else {
+      // ドロップ先の行の後ろに挿入
+      insertPos += 1
+    }
+
+    const reordered = [
+      ...rest.slice(0, insertPos),
+      ...moved,
+      ...rest.slice(insertPos),
+    ]
+
     const updates = reordered.map((r, i) => ({ id: r.id, displayOrder: i }))
-
-    const suggested = getSuggestedDay(reordered, newIndex)
+    const blockStart = reordered.findIndex((r) => movedIds.has(r.id))
+    const suggested = getSuggestedDay(reordered, blockStart)
     setReorderDay(suggested)
     setReorderPending({
       reordered,
       updates,
-      movedIds: [active.id as string],
+      movedIds: Array.from(movedIds),
       suggestedDay: suggested,
     })
 
