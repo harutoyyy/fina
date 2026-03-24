@@ -21,6 +21,7 @@ import {
   updateTransactionStatus,
   deleteTransaction,
   upsertTransactionDetails,
+  getDeductionDetailsForTransaction,
   type TransactionWithRelations,
 } from "@/app/actions/transactions"
 import { formatYen, getCurrentMonth, formatDate } from "@/lib/format"
@@ -67,6 +68,7 @@ export default function SalesPage() {
   const [deductionTarget, setDeductionTarget] = useState<TransactionWithRelations | null>(null)
   const [deductionOpen, setDeductionOpen] = useState(false)
   const [monthClosed, setMonthClosed] = useState(false)
+  const [deductionSummaries, setDeductionSummaries] = useState<Record<string, { name: string; amount: string }[]>>({})
 
   const [formAccountId, setFormAccountId] = useState("")
   const [formPartnerId, setFormPartnerId] = useState("")
@@ -282,13 +284,27 @@ export default function SalesPage() {
     }
   }
 
-  const toggleExpand = (id: string) => {
+  const toggleExpand = async (id: string) => {
     setExpandedRows((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next
     })
+    // 展開時に控除内訳を読み込む
+    if (!expandedRows.has(id) && !deductionSummaries[id]) {
+      try {
+        const details = await getDeductionDetailsForTransaction(id)
+        if (details.length > 0) {
+          setDeductionSummaries((prev) => ({
+            ...prev,
+            [id]: details.map((d) => ({ name: d.summary || "控除", amount: d.amount })),
+          }))
+        }
+      } catch {
+        // ignore
+      }
+    }
   }
 
   const getAccountLabel = (acc: Account) => {
@@ -541,6 +557,34 @@ export default function SalesPage() {
                           </TableCell>
                         </TableRow>
                       )}
+                      {isExpanded && remaining > 0 && (
+                        <TableRow key={`${txn.id}-deductions`} className="bg-orange-50 dark:bg-orange-950/30">
+                          <TableCell></TableCell>
+                          <TableCell colSpan={5} className="text-sm">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-orange-700 dark:text-orange-300">差額（控除）</span>
+                              <span className="font-mono text-orange-600">{formatYen(remaining)}</span>
+                              {deductionSummaries[txn.id] && deductionSummaries[txn.id].length > 0 ? (
+                                <span className="text-xs text-muted-foreground ml-2">
+                                  ({deductionSummaries[txn.id].map((d) => `${d.name}: ${formatYen(Number(d.amount))}`).join("、")})
+                                </span>
+                              ) : (
+                                <span className="text-xs text-orange-500 ml-2">控除内訳が未入力です</span>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell colSpan={5} className="text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-orange-300 text-orange-700 hover:bg-orange-100 dark:border-orange-700 dark:text-orange-300"
+                              onClick={(e) => { e.stopPropagation(); setDeductionTarget(txn); setDeductionOpen(true) }}
+                            >
+                              控除内訳を入力
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      )}
                     </Fragment>
                   )
                 })}
@@ -606,7 +650,17 @@ export default function SalesPage() {
           diffAmount={getRemainingAmount(deductionTarget)}
           open={deductionOpen}
           onOpenChange={setDeductionOpen}
-          onSaved={loadData}
+          onSaved={() => {
+            // 控除サマリーをリフレッシュ
+            setDeductionSummaries((prev) => {
+              const next = { ...prev }
+              delete next[deductionTarget.id]
+              return next
+            })
+            toggleExpand(deductionTarget.id) // 再読み込み
+            toggleExpand(deductionTarget.id)
+            loadData()
+          }}
         />
       )}
     </div>

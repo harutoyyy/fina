@@ -20,6 +20,7 @@ import {
   updateRecurringTemplate,
   deleteRecurringTemplate,
   generateRecurringTransactions,
+  autoGenerateRecurringTransactions,
 } from "@/app/actions/recurring"
 import { formatYen, getCurrentMonth } from "@/lib/format"
 
@@ -134,6 +135,8 @@ export default function RecurringPage() {
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [generateResult, setGenerateResult] = useState<{ templateName: string; transactionId: string }[] | null>(null)
+  const [autoGenResult, setAutoGenResult] = useState<{ templateName: string; month: string }[] | null>(null)
+  const [autoGenRan, setAutoGenRan] = useState(false)
 
   const allMidCategories = categories.flatMap((m) => m.midCategories)
   const selectedMid = allMidCategories.find((m) => m.id === form.midId)
@@ -174,6 +177,18 @@ export default function RecurringPage() {
       loadTemplates(selectedCompany.id)
     }
   }, [selectedCompany, loadMasterData, loadTemplates])
+
+  // ページ読み込み時に未生成月を自動生成
+  useEffect(() => {
+    if (!selectedCompany || autoGenRan) return
+    setAutoGenRan(true)
+    autoGenerateRecurringTransactions(selectedCompany.id).then((results) => {
+      if (results.length > 0) {
+        setAutoGenResult(results)
+        loadTemplates(selectedCompany.id)
+      }
+    }).catch(console.error)
+  }, [selectedCompany, autoGenRan, loadTemplates])
 
   const resetForm = () => {
     setForm(initialFormState)
@@ -224,6 +239,13 @@ export default function RecurringPage() {
         })
       }
       resetForm()
+      // 新規作成後は自動生成を実行（当月まで埋める）
+      if (!editingId) {
+        const results = await autoGenerateRecurringTransactions(selectedCompany.id)
+        if (results.length > 0) {
+          setAutoGenResult(results)
+        }
+      }
       loadTemplates(selectedCompany.id)
     } finally {
       setSubmitting(false)
@@ -322,6 +344,24 @@ export default function RecurringPage() {
           <Button onClick={openNewForm}>新規テンプレート</Button>
         </div>
       </div>
+
+      {autoGenResult && autoGenResult.length > 0 && (
+        <Card className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950">
+          <CardContent className="pt-4 pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-green-800 dark:text-green-200">
+                  {autoGenResult.length}件の取引を自動生成しました
+                </p>
+                <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                  {autoGenResult.map((r) => `${r.templateName}（${r.month}）`).join("、")}
+                </p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setAutoGenResult(null)}>閉じる</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Dialog open={generateDialogOpen} onOpenChange={setGenerateDialogOpen}>
         <DialogContent>
