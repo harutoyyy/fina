@@ -24,7 +24,7 @@ import {
   type CashFlowRow,
 } from "@/app/actions/cashflow-table"
 import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
-import { Printer, GripVertical } from "lucide-react"
+import { Printer, GripVertical, ChevronUp, ChevronDown } from "lucide-react"
 import {
   DndContext,
   closestCenter,
@@ -205,6 +205,17 @@ export default function CashFlowTablePage() {
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
   const [deferLoading, setDeferLoading] = useState(false)
 
+  // 並べ替え時の日付設定ダイアログ
+  const [reorderPending, setReorderPending] = useState<{
+    reordered: CashFlowRow[]
+    updates: { id: string; displayOrder: number }[]
+    movedIds: string[]
+    suggestedDate: string
+  } | null>(null)
+  const [reorderDate, setReorderDate] = useState("")
+  const [reorderSaving, setReorderSaving] = useState(false)
+  const [prevTableData, setPrevTableData] = useState<CashFlowTableData | null>(null)
+
   const loadAccounts = useCallback(async (companyId: string) => {
     const accts = await getAccounts(companyId)
     const activeAccounts = accts.filter((a) => a.isActive).map((a) => ({
@@ -346,18 +357,20 @@ export default function CashFlowTablePage() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
-  const handleDragEnd = async (event: DragEndEvent) => {
-    const { active, over } = event
-    if (!over || active.id === over.id || !selectedCompany || !tableData) return
+  const getSuggestedDate = (rows: CashFlowRow[], targetIndex: number): string => {
+    // 移動先の直上の行の日付を取得
+    if (targetIndex > 0) {
+      const above = rows[targetIndex - 1]
+      const d = above.scheduledDate || above.transactionDate
+      if (d) return d.slice(0, 10)
+    }
+    // 直上がない場合は当月の1日
+    return `${selectedMonth}-01`
+  }
 
-    const oldIndex = filteredRows.findIndex((r) => r.id === active.id)
-    const newIndex = filteredRows.findIndex((r) => r.id === over.id)
-    if (oldIndex === -1 || newIndex === -1) return
-
-    const reordered = arrayMove(filteredRows, oldIndex, newIndex)
-    const updates = reordered.map((r, i) => ({ id: r.id, displayOrder: i }))
-
-    // Optimistic update: recalculate running balances
+  const applyOptimisticReorder = (reordered: CashFlowRow[]) => {
+    if (!tableData) return
+    setPrevTableData(tableData)
     const openBal = Number(tableData.openingBalance)
     let running = openBal
     const updatedRows = reordered.map((r) => {
@@ -368,14 +381,107 @@ export default function CashFlowTablePage() {
     setTableData((prev) =>
       prev ? { ...prev, rows: updatedRows } : prev
     )
+  }
 
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id || !selectedCompany || !tableData) return
+
+    const oldIndex = filteredRows.findIndex((r) => r.id === active.id)
+    const newIndex = filteredRows.findIndex((r) => r.id === over.id)
+    if (oldIndex === -1 || newIndex === -1) return
+
+    const reordered = arrayMove(filteredRows, oldIndex, newIndex)
+    const updates = reordered.map((r, i) => ({ id: r.id, displayOrder: i }))
+
+    const suggested = getSuggestedDate(reordered, newIndex)
+    setReorderDate(suggested)
+    setReorderPending({
+      reordered,
+      updates,
+      movedIds: [active.id as string],
+      suggestedDate: suggested,
+    })
+
+    applyOptimisticReorder(reordered)
+  }
+
+  const handleConfirmReorder = async () => {
+    if (!reorderPending || !selectedCompany) return
+    setReorderSaving(true)
     try {
-      await reorderTransactions(updates, selectedCompany.id, selectedAccountId, selectedMonth)
+      const dateUpdates = reorderPending.movedIds.map((id) => ({
+        transactionId: id,
+        scheduledDate: reorderDate,
+      }))
+      await reorderTransactions(
+        reorderPending.updates,
+        selectedCompany.id,
+        selectedAccountId,
+        selectedMonth,
+        dateUpdates
+      )
       await loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
     } catch (e) {
       console.error("Failed to reorder:", e)
-      await loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
+      if (prevTableData) setTableData(prevTableData)
+    } finally {
+      setReorderPending(null)
+      setReorderDate("")
+      setReorderSaving(false)
+      setPrevTableData(null)
     }
+  }
+
+  const handleCancelReorder = () => {
+    if (prevTableData) setTableData(prevTableData)
+    setReorderPending(null)
+    setReorderDate("")
+    setPrevTableData(null)
+  }
+
+  const handleMoveSelected = (direction: "up" | "down") => {
+    if (!tableData || !selectedCompany || selectedRows.size === 0) return
+
+    const rows = [...filteredRows]
+    const selectedIndices = rows
+      .map((r, i) => (selectedRows.has(r.id) ? i : -1))
+      .filter((i) => i !== -1)
+      .sort((a, b) => a - b)
+
+    if (selectedIndices.length === 0) return
+    const first = selectedIndices[0]
+    const last = selectedIndices[selectedIndices.length - 1]
+
+    if (direction === "up" && first === 0) return
+    if (direction === "down" && last === rows.length - 1) return
+
+    // Move the block of selected rows
+    let reordered: CashFlowRow[]
+    if (direction === "up") {
+      const target = first - 1
+      const item = rows.splice(target, 1)[0]
+      rows.splice(last, 0, item)
+      reordered = rows
+    } else {
+      const target = last + 1
+      const item = rows.splice(target, 1)[0]
+      rows.splice(first, 0, item)
+      reordered = rows
+    }
+
+    const updates = reordered.map((r, i) => ({ id: r.id, displayOrder: i }))
+    const targetIndex = direction === "up" ? first - 1 : first + 1
+    const suggested = getSuggestedDate(reordered, targetIndex)
+    setReorderDate(suggested)
+    setReorderPending({
+      reordered,
+      updates,
+      movedIds: Array.from(selectedRows),
+      suggestedDate: suggested,
+    })
+
+    applyOptimisticReorder(reordered)
   }
 
   const isClosed = monthCloseStatus?.isClosed === true
@@ -400,13 +506,31 @@ export default function CashFlowTablePage() {
         </div>
         <div className="flex items-center gap-2">
           {!isClosed && selectedRows.size > 0 && (
-            <Button
-              variant="outline"
-              onClick={handleDeferSelected}
-              disabled={deferLoading}
-            >
-              {deferLoading ? "処理中..." : `${selectedRows.size}件を翌月へ繰り延べ`}
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleMoveSelected("up")}
+              >
+                <ChevronUp className="h-4 w-4 mr-1" />
+                上へ
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleMoveSelected("down")}
+              >
+                <ChevronDown className="h-4 w-4 mr-1" />
+                下へ
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleDeferSelected}
+                disabled={deferLoading}
+              >
+                {deferLoading ? "処理中..." : `${selectedRows.size}件を翌月へ繰り延べ`}
+              </Button>
+            </>
           )}
           {isClosed ? (
             <Button
@@ -645,6 +769,40 @@ export default function CashFlowTablePage() {
               disabled={actionLoading || !reopenReason.trim()}
             >
               {actionLoading ? "処理中..." : "解除する"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={reorderPending !== null} onOpenChange={(open) => { if (!open) handleCancelReorder() }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>並べ替え — 日付の設定</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-muted-foreground">
+              {reorderPending?.movedIds.length === 1
+                ? "移動した取引の予定日を設定してください。"
+                : `${reorderPending?.movedIds.length}件の取引の予定日を設定してください。`}
+            </p>
+            <div className="space-y-2">
+              <Label>予定日</Label>
+              <Input
+                type="date"
+                value={reorderDate}
+                onChange={(e) => setReorderDate(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleCancelReorder} disabled={reorderSaving}>
+              キャンセル
+            </Button>
+            <Button
+              onClick={handleConfirmReorder}
+              disabled={reorderSaving || !reorderDate}
+            >
+              {reorderSaving ? "保存中..." : "この日付で確定"}
             </Button>
           </DialogFooter>
         </DialogContent>

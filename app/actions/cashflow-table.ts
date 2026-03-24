@@ -537,19 +537,31 @@ export async function reorderTransactions(
   updates: { id: string; displayOrder: number }[],
   companyId: string,
   accountId: string,
-  yearMonth: string
+  yearMonth: string,
+  dateUpdates?: { transactionId: string; scheduledDate: string }[]
 ) {
   await requireSession()
   await verifyCompanyAccess(companyId)
 
-  await prisma.$transaction(
-    updates.map((u) =>
-      prisma.transaction.update({
-        where: { id: u.id },
-        data: { displayOrder: u.displayOrder },
-      })
-    )
+  const ops = updates.map((u) =>
+    prisma.transaction.update({
+      where: { id: u.id },
+      data: { displayOrder: u.displayOrder },
+    })
   )
+
+  if (dateUpdates && dateUpdates.length > 0) {
+    for (const du of dateUpdates) {
+      ops.push(
+        prisma.transaction.update({
+          where: { id: du.transactionId },
+          data: { scheduledDate: new Date(du.scheduledDate) },
+        })
+      )
+    }
+  }
+
+  await prisma.$transaction(ops)
 
   await recalculateClosingBalance(companyId, accountId, yearMonth)
   revalidatePath("/cashflow-table")
