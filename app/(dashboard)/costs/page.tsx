@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import { useSearchParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -74,6 +75,7 @@ function calcDifference(form: CostFormData): number {
 }
 
 export default function CostsPage() {
+  const searchParams = useSearchParams()
   const { selectedCompany } = useCompany()
   const [accounts, setAccounts] = useState<AccountOption[]>([])
   const [partners, setPartners] = useState<PartnerOption[]>([])
@@ -117,6 +119,16 @@ export default function CostsPage() {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // 資金繰り表からの編集遷移: ?edit=transactionId
+  useEffect(() => {
+    const editId = searchParams.get("edit")
+    if (editId && transactions.length > 0 && !dialogOpen) {
+      const tx = transactions.find((t) => t.id === editId)
+      if (tx) openEditDialog(tx)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, transactions])
 
   function openCreateDialog() {
     setEditingId(null)

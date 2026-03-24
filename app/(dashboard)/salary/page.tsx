@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import { useSearchParams } from "next/navigation"
 import { useCompany } from "@/contexts/company-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -142,6 +143,7 @@ function calcConsumptionTax(f: typeof emptyForm) {
 }
 
 export default function SalaryPage() {
+  const searchParams = useSearchParams()
   const { selectedCompany } = useCompany()
   const [payrollGroups, setPayrollGroups] = useState<PayrollGroupOption[]>([])
   const [accounts, setAccounts] = useState<AccountOption[]>([])
@@ -205,6 +207,16 @@ export default function SalaryPage() {
       loadEntries(selectedCompany.id)
     }
   }, [selectedCompany, loadEntries])
+
+  // 資金繰り表からの編集遷移: ?edit=transactionId
+  useEffect(() => {
+    const editId = searchParams.get("edit")
+    if (editId && entries.length > 0 && !dialogOpen) {
+      const entry = entries.find((e) => e.id === editId)
+      if (entry) openEditForm(entry)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, entries])
 
   const openNewForm = () => {
     setForm({ ...emptyForm })

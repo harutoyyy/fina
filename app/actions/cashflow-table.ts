@@ -53,6 +53,11 @@ export type CashFlowRow = {
   summary: string | null
   displayOrder: number
   updatedAt: string
+  estimatedAmount: string | null
+  actualAmount: string | null
+  invoiceAmount: string | null
+  recordedAmount: string | null
+  transferAmount: string | null
   details: {
     id: string
     midId: string | null
@@ -185,6 +190,11 @@ export async function getCashFlowTable(
       summary: tx.summary,
       displayOrder: tx.displayOrder,
       updatedAt: tx.updatedAt.toISOString(),
+      estimatedAmount: tx.estimatedAmount?.toString() ?? null,
+      actualAmount: tx.actualAmount?.toString() ?? null,
+      invoiceAmount: tx.invoiceAmount?.toString() ?? null,
+      recordedAmount: tx.recordedAmount?.toString() ?? null,
+      transferAmount: tx.transferAmount?.toString() ?? null,
       details: tx.details.map((d) => ({
         id: d.id,
         midId: d.midId,

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, Fragment } from "react"
+import { useSearchParams } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -47,6 +48,7 @@ const statusVariants: Record<string, "default" | "secondary" | "destructive" | "
 }
 
 export default function SalesPage() {
+  const searchParams = useSearchParams()
   const { selectedCompany } = useCompany()
   const [accounts, setAccounts] = useState<Account[]>([])
   const [partners, setPartners] = useState<Partner[]>([])
@@ -131,6 +133,16 @@ export default function SalesPage() {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // 資金繰り表からの編集遷移: ?edit=transactionId
+  useEffect(() => {
+    const editId = searchParams.get("edit")
+    if (editId && transactions.length > 0 && !editDialogOpen) {
+      const tx = transactions.find((t) => t.id === editId)
+      if (tx) openEditDialog(tx)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, transactions])
 
   const resetForm = () => {
     setFormAccountId("")

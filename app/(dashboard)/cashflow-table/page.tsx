@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo } from "react"
+import { useRouter } from "next/navigation"
 import { useCompany } from "@/contexts/company-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -80,6 +81,31 @@ const CLASSIFICATION_LABELS: Record<string, string> = {
   TEMPORARY: "臨時",
 }
 
+const TYPE_TO_PAGE: Record<string, string> = {
+  EXPENSE: "/expenses",
+  SALES: "/sales",
+  COST_PAYMENT: "/costs",
+  SALARY: "/salary",
+  LOAN: "/loans",
+  TRANSFER: "/expenses",
+}
+
+function getVariance(row: CashFlowRow): number | null {
+  const est = row.estimatedAmount ? Number(row.estimatedAmount) : null
+  const act = row.actualAmount ? Number(row.actualAmount) : null
+  if (est !== null && act !== null) return act - est
+
+  const rec = row.recordedAmount ? Number(row.recordedAmount) : null
+  const trn = row.transferAmount ? Number(row.transferAmount) : null
+  if (rec !== null && trn !== null) return trn - rec
+
+  const inv = row.invoiceAmount ? Number(row.invoiceAmount) : null
+  const amt = Number(row.amount)
+  if (inv !== null) return amt - inv
+
+  return null
+}
+
 function SortableRow({
   row,
   isClosed,
@@ -87,6 +113,9 @@ function SortableRow({
   toggleRowSelection,
   handleDeferSingle,
   deferLoading,
+  onDoubleClick,
+  onRowClick,
+  isSelected,
 }: {
   row: CashFlowRow
   isClosed: boolean
@@ -94,6 +123,9 @@ function SortableRow({
   toggleRowSelection: (id: string) => void
   handleDeferSingle: (id: string) => void
   deferLoading: boolean
+  onDoubleClick: (row: CashFlowRow) => void
+  onRowClick: (row: CashFlowRow) => void
+  isSelected: boolean
 }) {
   const {
     attributes,
@@ -117,14 +149,21 @@ function SortableRow({
     ? [detail.midName, detail.subName].filter(Boolean).join(" / ")
     : "—"
   const canDefer = row.status !== "CONFIRMED"
+  const variance = getVariance(row)
 
   return (
-    <TableRow ref={setNodeRef} style={style}>
-      <TableCell className="w-8 cursor-grab" {...attributes} {...listeners}>
+    <TableRow
+      ref={setNodeRef}
+      style={style}
+      className={`cursor-pointer ${isSelected ? "bg-muted/50" : ""}`}
+      onClick={() => onRowClick(row)}
+      onDoubleClick={() => onDoubleClick(row)}
+    >
+      <TableCell className="w-8 cursor-grab" {...attributes} {...listeners} onClick={(e) => e.stopPropagation()}>
         <GripVertical className="h-4 w-4 text-muted-foreground" />
       </TableCell>
       {!isClosed && (
-        <TableCell>
+        <TableCell onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={selectedRows.has(row.id)}
             onCheckedChange={() => toggleRowSelection(row.id)}
@@ -158,19 +197,15 @@ function SortableRow({
       </TableCell>
       <TableCell className="max-w-[200px] truncate">{row.summary || "—"}</TableCell>
       <TableCell className="text-sm">{categoryDisplay}</TableCell>
-      <TableCell className="text-right font-mono">
-        {row.details.length > 1
-          ? formatYen(
-              row.details.reduce((sum, d) => sum + Number(d.amount), 0) - Number(row.amount)
-            )
-          : "—"}
+      <TableCell className={`text-right font-mono ${variance !== null && variance !== 0 ? (variance > 0 ? "text-green-600" : "text-red-600") : ""}`}>
+        {variance !== null ? formatYen(variance) : "—"}
       </TableCell>
       <TableCell>
         <Badge variant={STATUS_VARIANTS[row.status] || "outline"}>
           {STATUS_LABELS[row.status] || row.status}
         </Badge>
       </TableCell>
-      <TableCell>
+      <TableCell onClick={(e) => e.stopPropagation()}>
         {!isClosed && canDefer && (
           <Button
             variant="ghost"
@@ -187,6 +222,7 @@ function SortableRow({
 }
 
 export default function CashFlowTablePage() {
+  const router = useRouter()
   const { selectedCompany } = useCompany()
   const [accounts, setAccounts] = useState<AccountOption[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState<string>("")
@@ -204,15 +240,16 @@ export default function CashFlowTablePage() {
   const [actionLoading, setActionLoading] = useState(false)
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
   const [deferLoading, setDeferLoading] = useState(false)
+  const [previewRow, setPreviewRow] = useState<CashFlowRow | null>(null)
 
   // 並べ替え時の日付設定ダイアログ
   const [reorderPending, setReorderPending] = useState<{
     reordered: CashFlowRow[]
     updates: { id: string; displayOrder: number }[]
     movedIds: string[]
-    suggestedDate: string
+    suggestedDay: string
   } | null>(null)
-  const [reorderDate, setReorderDate] = useState("")
+  const [reorderDay, setReorderDay] = useState("")
   const [reorderSaving, setReorderSaving] = useState(false)
   const [prevTableData, setPrevTableData] = useState<CashFlowTableData | null>(null)
 
@@ -357,15 +394,17 @@ export default function CashFlowTablePage() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
-  const getSuggestedDate = (rows: CashFlowRow[], targetIndex: number): string => {
-    // 移動先の直上の行の日付を取得
+  const getSuggestedDay = (rows: CashFlowRow[], targetIndex: number): string => {
+    // 移動先の直上の行の日付からDDを取得
     if (targetIndex > 0) {
       const above = rows[targetIndex - 1]
       const d = above.scheduledDate || above.transactionDate
-      if (d) return d.slice(0, 10)
+      if (d) {
+        const day = new Date(d).getDate()
+        return String(day).padStart(2, "0")
+      }
     }
-    // 直上がない場合は当月の1日
-    return `${selectedMonth}-01`
+    return "01"
   }
 
   const applyOptimisticReorder = (reordered: CashFlowRow[]) => {
@@ -394,13 +433,13 @@ export default function CashFlowTablePage() {
     const reordered = arrayMove(filteredRows, oldIndex, newIndex)
     const updates = reordered.map((r, i) => ({ id: r.id, displayOrder: i }))
 
-    const suggested = getSuggestedDate(reordered, newIndex)
-    setReorderDate(suggested)
+    const suggested = getSuggestedDay(reordered, newIndex)
+    setReorderDay(suggested)
     setReorderPending({
       reordered,
       updates,
       movedIds: [active.id as string],
-      suggestedDate: suggested,
+      suggestedDay: suggested,
     })
 
     applyOptimisticReorder(reordered)
@@ -410,9 +449,10 @@ export default function CashFlowTablePage() {
     if (!reorderPending || !selectedCompany) return
     setReorderSaving(true)
     try {
+      const fullDate = `${selectedMonth}-${reorderDay.padStart(2, "0")}`
       const dateUpdates = reorderPending.movedIds.map((id) => ({
         transactionId: id,
-        scheduledDate: reorderDate,
+        scheduledDate: fullDate,
       }))
       await reorderTransactions(
         reorderPending.updates,
@@ -427,7 +467,7 @@ export default function CashFlowTablePage() {
       if (prevTableData) setTableData(prevTableData)
     } finally {
       setReorderPending(null)
-      setReorderDate("")
+      setReorderDay("")
       setReorderSaving(false)
       setPrevTableData(null)
     }
@@ -436,8 +476,15 @@ export default function CashFlowTablePage() {
   const handleCancelReorder = () => {
     if (prevTableData) setTableData(prevTableData)
     setReorderPending(null)
-    setReorderDate("")
+    setReorderDay("")
     setPrevTableData(null)
+  }
+
+  const handleRowDoubleClick = (row: CashFlowRow) => {
+    const page = TYPE_TO_PAGE[row.type]
+    if (page) {
+      router.push(`${page}?edit=${row.id}`)
+    }
   }
 
   const handleMoveSelected = (direction: "up" | "down") => {
@@ -472,13 +519,13 @@ export default function CashFlowTablePage() {
 
     const updates = reordered.map((r, i) => ({ id: r.id, displayOrder: i }))
     const targetIndex = direction === "up" ? first - 1 : first + 1
-    const suggested = getSuggestedDate(reordered, targetIndex)
-    setReorderDate(suggested)
+    const suggested = getSuggestedDay(reordered, targetIndex)
+    setReorderDay(suggested)
     setReorderPending({
       reordered,
       updates,
       movedIds: Array.from(selectedRows),
-      suggestedDate: suggested,
+      suggestedDay: suggested,
     })
 
     applyOptimisticReorder(reordered)
@@ -731,6 +778,9 @@ export default function CashFlowTablePage() {
                           toggleRowSelection={toggleRowSelection}
                           handleDeferSingle={handleDeferSingle}
                           deferLoading={deferLoading}
+                          onDoubleClick={handleRowDoubleClick}
+                          onRowClick={setPreviewRow}
+                          isSelected={previewRow?.id === row.id}
                         />
                       ))}
                     </TableBody>
@@ -775,23 +825,31 @@ export default function CashFlowTablePage() {
       </Dialog>
 
       <Dialog open={reorderPending !== null} onOpenChange={(open) => { if (!open) handleCancelReorder() }}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-[360px]">
           <DialogHeader>
-            <DialogTitle>並べ替え — 日付の設定</DialogTitle>
+            <DialogTitle>並べ替え — 予定日の設定</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <p className="text-sm text-muted-foreground">
               {reorderPending?.movedIds.length === 1
-                ? "移動した取引の予定日を設定してください。"
-                : `${reorderPending?.movedIds.length}件の取引の予定日を設定してください。`}
+                ? "移動した取引の予定日（日付）を設定してください。"
+                : `${reorderPending?.movedIds.length}件の取引の予定日（日付）を設定してください。`}
             </p>
             <div className="space-y-2">
-              <Label>予定日</Label>
-              <Input
-                type="date"
-                value={reorderDate}
-                onChange={(e) => setReorderDate(e.target.value)}
-              />
+              <Label>{selectedMonth} の</Label>
+              <div className="flex items-center gap-2">
+                <Select value={reorderDay} onValueChange={setReorderDay}>
+                  <SelectTrigger className="w-24">
+                    <SelectValue placeholder="日" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: new Date(Number(selectedMonth.split("-")[0]), Number(selectedMonth.split("-")[1]), 0).getDate() }, (_, i) => {
+                      const d = String(i + 1).padStart(2, "0")
+                      return <SelectItem key={d} value={d}>{d}日</SelectItem>
+                    })}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -800,13 +858,86 @@ export default function CashFlowTablePage() {
             </Button>
             <Button
               onClick={handleConfirmReorder}
-              disabled={reorderSaving || !reorderDate}
+              disabled={reorderSaving || !reorderDay}
             >
-              {reorderSaving ? "保存中..." : "この日付で確定"}
+              {reorderSaving ? "保存中..." : "確定"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {previewRow && (
+        <Dialog open={true} onOpenChange={() => setPreviewRow(null)}>
+          <DialogContent className="sm:max-w-[500px]">
+            <DialogHeader>
+              <DialogTitle>取引プレビュー</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3 py-2 text-sm">
+              <div className="grid grid-cols-2 gap-2">
+                <div className="text-muted-foreground">取引種別</div>
+                <div>{TYPE_LABELS[previewRow.type] || previewRow.type}</div>
+                <div className="text-muted-foreground">取引先</div>
+                <div>{previewRow.partnerName || "—"}</div>
+                <div className="text-muted-foreground">実出納日</div>
+                <div>{previewRow.transactionDate ? formatDate(previewRow.transactionDate) : "—"}</div>
+                <div className="text-muted-foreground">予定日</div>
+                <div>{previewRow.scheduledDate ? formatDate(previewRow.scheduledDate) : "—"}</div>
+                <div className="text-muted-foreground">金額</div>
+                <div className="font-mono">{formatYen(Math.abs(Number(previewRow.amount)))}</div>
+                {previewRow.estimatedAmount && (
+                  <>
+                    <div className="text-muted-foreground">予定金額</div>
+                    <div className="font-mono">{formatYen(Math.abs(Number(previewRow.estimatedAmount)))}</div>
+                  </>
+                )}
+                {previewRow.actualAmount && (
+                  <>
+                    <div className="text-muted-foreground">実績金額</div>
+                    <div className="font-mono">{formatYen(Math.abs(Number(previewRow.actualAmount)))}</div>
+                  </>
+                )}
+                {(() => {
+                  const v = getVariance(previewRow)
+                  if (v === null) return null
+                  return (
+                    <>
+                      <div className="text-muted-foreground">差額</div>
+                      <div className={`font-mono font-medium ${v > 0 ? "text-green-600" : v < 0 ? "text-red-600" : ""}`}>
+                        {formatYen(v)}
+                      </div>
+                    </>
+                  )
+                })()}
+                <div className="text-muted-foreground">ステータス</div>
+                <div><Badge variant={STATUS_VARIANTS[previewRow.status] || "outline"}>{STATUS_LABELS[previewRow.status] || previewRow.status}</Badge></div>
+                <div className="text-muted-foreground">摘要</div>
+                <div>{previewRow.summary || "—"}</div>
+              </div>
+              {previewRow.details.length > 0 && (
+                <div className="border-t pt-3 mt-3">
+                  <p className="font-medium mb-2">内訳</p>
+                  <div className="space-y-1">
+                    {previewRow.details.map((d) => (
+                      <div key={d.id} className="flex justify-between text-sm">
+                        <span>{[d.midName, d.subName].filter(Boolean).join(" / ") || "—"}{d.summary ? ` (${d.summary})` : ""}</span>
+                        <span className="font-mono">{formatYen(Math.abs(Number(d.amount)))}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPreviewRow(null)}>
+                閉じる
+              </Button>
+              <Button onClick={() => { handleRowDoubleClick(previewRow); setPreviewRow(null) }}>
+                編集画面へ
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   )
 }

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import { useSearchParams } from "next/navigation"
 import { useCompany } from "@/contexts/company-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -92,6 +93,7 @@ const initialFormState = {
 }
 
 export default function ExpensesPage() {
+  const searchParams = useSearchParams()
   const { selectedCompany } = useCompany()
   const [accounts, setAccounts] = useState<AccountOption[]>([])
   const [partners, setPartners] = useState<PartnerOption[]>([])
@@ -169,6 +171,18 @@ export default function ExpensesPage() {
       loadTransactions(selectedCompany.id)
     }
   }, [selectedCompany, loadTransactions])
+
+  // 資金繰り表からの編集遷移: ?edit=transactionId
+  useEffect(() => {
+    const editId = searchParams.get("edit")
+    if (editId && transactions.length > 0 && !dialogOpen) {
+      const tx = transactions.find((t) => t.id === editId)
+      if (tx) {
+        handleEdit(tx)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, transactions])
 
   const handlePartnerChange = (partnerId: string) => {
     setForm((prev) => {
