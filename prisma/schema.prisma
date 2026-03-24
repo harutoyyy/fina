@@ -29,7 +29,7 @@ model User {
   accounts      AuthAccount[]
   profile       UserProfile?
 
-  @@map("user")
+  @@map("user_fina")
 }
 
 model Session {
@@ -44,7 +44,7 @@ model Session {
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@map("session")
+  @@map("session_fina")
 }
 
 model AuthAccount {
@@ -64,7 +64,7 @@ model AuthAccount {
 
   user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@map("account")
+  @@map("account_fina")
 }
 
 model Verification {
@@ -75,7 +75,7 @@ model Verification {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  @@map("verification")
+  @@map("verification_fina")
 }
 
 // ============================================================
@@ -99,7 +99,7 @@ model UserProfile {
 
   user            User      @relation(fields: [authUserId], references: [id], onDelete: Cascade)
 
-  @@map("user_profiles")
+  @@map("user_profiles_fina")
 }
 
 // ============================================================
@@ -146,7 +146,7 @@ model Company {
   recurringTemplates RecurringTemplate[]
   monthCloses     MonthClose[]
 
-  @@map("companies")
+  @@map("companies_fina")
 }
 
 // ============================================================
@@ -191,7 +191,7 @@ model Account {
   fundTransfersFrom FundTransfer[] @relation("TransferFrom")
   fundTransfersTo   FundTransfer[] @relation("TransferTo")
 
-  @@map("accounts")
+  @@map("accounts_fina")
 }
 
 // 口座の役割マスタ
@@ -205,7 +205,7 @@ model AccountRole {
   account     Account @relation(fields: [accountId], references: [id])
 
   @@unique([accountId, roleKey])
-  @@map("account_roles")
+  @@map("account_roles_fina")
 }
 
 // ============================================================
@@ -226,7 +226,7 @@ model MonthlyBalance {
   account         Account  @relation(fields: [accountId], references: [id])
 
   @@unique([accountId, yearMonth])
-  @@map("monthly_balances")
+  @@map("monthly_balances_fina")
 }
 
 // ============================================================
@@ -245,7 +245,7 @@ model AccountCategoryMajor {
 
   midCategories AccountCategoryMid[]
 
-  @@map("account_category_majors")
+  @@map("account_category_majors_fina")
 }
 
 // 中項目（勘定科目）
@@ -263,7 +263,7 @@ model AccountCategoryMid {
   transactionDetails TransactionDetail[]
   defaultPartnerMappings TradingPartnerDefault[]
 
-  @@map("account_category_mids")
+  @@map("account_category_mids_fina")
 }
 
 // 小項目（補助科目）
@@ -280,7 +280,7 @@ model AccountCategorySub {
   transactionDetails TransactionDetail[]
   defaultPartnerMappings TradingPartnerDefault[]
 
-  @@map("account_category_subs")
+  @@map("account_category_subs_fina")
 }
 
 // ============================================================
@@ -313,7 +313,7 @@ model TradingPartner {
   sites           TradingPartnerSite[]
   transactions    Transaction[]
 
-  @@map("trading_partners")
+  @@map("trading_partners_fina")
 }
 
 // 取引先の振込先口座（複数登録可）
@@ -331,7 +331,7 @@ model TradingPartnerBankAccount {
 
   partner         TradingPartner @relation(fields: [partnerId], references: [id])
 
-  @@map("trading_partner_bank_accounts")
+  @@map("trading_partner_bank_accounts_fina")
 }
 
 // 取引先デフォルト科目
@@ -346,7 +346,7 @@ model TradingPartnerDefault {
   sub         AccountCategorySub? @relation(fields: [subId], references: [id])
 
   @@unique([partnerId])
-  @@map("trading_partner_defaults")
+  @@map("trading_partner_defaults_fina")
 }
 
 // 取引先 > 契約/地点テンプレ（任意）
@@ -371,7 +371,7 @@ model TradingPartnerSite {
 
   partner         TradingPartner @relation(fields: [partnerId], references: [id])
 
-  @@map("trading_partner_sites")
+  @@map("trading_partner_sites_fina")
 }
 
 // ============================================================
@@ -465,7 +465,7 @@ model Transaction {
   @@index([companyId, accountId, accountingMonth])
   @@index([companyId, type, accountingMonth])
   @@index([parentId])
-  @@map("transactions")
+  @@map("transactions_fina")
 }
 
 // 取引明細（子）
@@ -490,7 +490,7 @@ model TransactionDetail {
   sub             AccountCategorySub? @relation(fields: [subId], references: [id])
 
   @@index([transactionId])
-  @@map("transaction_details")
+  @@map("transaction_details_fina")
 }
 
 // ============================================================
@@ -509,7 +509,7 @@ model Evidence {
 
   transaction     Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 
-  @@map("evidences")
+  @@map("evidences_fina")
 }
 
 // ============================================================
@@ -540,7 +540,7 @@ model PayrollGroup {
   company         Company  @relation(fields: [companyId], references: [id])
   salaryEntries   SalaryEntry[]
 
-  @@map("payroll_groups")
+  @@map("payroll_groups_fina")
 }
 
 // ============================================================
@@ -582,7 +582,7 @@ model SalaryEntry {
   paymentDetails  SalaryPaymentDetail[]
 
   @@unique([payrollGroupId, payMonth])
-  @@map("salary_entries")
+  @@map("salary_entries_fina")
 }
 
 // 給与控除明細
@@ -598,7 +598,7 @@ model SalaryDeduction {
 
   salaryEntry     SalaryEntry @relation(fields: [salaryEntryId], references: [id], onDelete: Cascade)
 
-  @@map("salary_deductions")
+  @@map("salary_deductions_fina")
 }
 
 // 給与 支払内訳（出金イベント）
@@ -613,7 +613,7 @@ model SalaryPaymentDetail {
 
   salaryEntry     SalaryEntry @relation(fields: [salaryEntryId], references: [id], onDelete: Cascade)
 
-  @@map("salary_payment_details")
+  @@map("salary_payment_details_fina")
 }
 
 // ============================================================
@@ -633,7 +633,7 @@ model DeductionCategory {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  @@map("deduction_categories")
+  @@map("deduction_categories_fina")
 }
 
 // ============================================================
@@ -657,7 +657,7 @@ model FundTransfer {
   fromAccount     Account     @relation("TransferFrom", fields: [fromAccountId], references: [id])
   toAccount       Account     @relation("TransferTo", fields: [toAccountId], references: [id])
 
-  @@map("fund_transfers")
+  @@map("fund_transfers_fina")
 }
 
 // ============================================================
@@ -682,7 +682,7 @@ model CashWithdrawalBatch {
   // 金種表
   denominations   CashDenomination[]
 
-  @@map("cash_withdrawal_batches")
+  @@map("cash_withdrawal_batches_fina")
 }
 
 // 金種表
@@ -706,7 +706,7 @@ model CashDenomination {
 
   batch           CashWithdrawalBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
-  @@map("cash_denominations")
+  @@map("cash_denominations_fina")
 }
 
 // ============================================================
@@ -744,7 +744,7 @@ model RecurringTemplate {
 
   company         Company @relation(fields: [companyId], references: [id])
 
-  @@map("recurring_templates")
+  @@map("recurring_templates_fina")
 }
 
 // ============================================================
@@ -783,7 +783,7 @@ model LoanContract {
   company         Company @relation(fields: [companyId], references: [id])
   schedules       LoanSchedule[]
 
-  @@map("loan_contracts")
+  @@map("loan_contracts_fina")
 }
 
 // 返済スケジュール
@@ -802,7 +802,7 @@ model LoanSchedule {
   contract        LoanContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   @@index([contractId])
-  @@map("loan_schedules")
+  @@map("loan_schedules_fina")
 }
 
 // ============================================================
@@ -831,7 +831,7 @@ model LeaseContract {
   company         Company @relation(fields: [companyId], references: [id])
   schedules       LeaseSchedule[]
 
-  @@map("lease_contracts")
+  @@map("lease_contracts_fina")
 }
 
 model LeaseSchedule {
@@ -846,7 +846,7 @@ model LeaseSchedule {
   contract        LeaseContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   @@index([contractId])
-  @@map("lease_schedules")
+  @@map("lease_schedules_fina")
 }
 
 // ============================================================
@@ -867,7 +867,7 @@ model MonthClose {
   company         Company @relation(fields: [companyId], references: [id])
 
   @@unique([companyId, yearMonth])
-  @@map("month_closes")
+  @@map("month_closes_fina")
 }
 
 // ============================================================
@@ -891,7 +891,7 @@ model TransferBatch {
 
   items           TransferBatchItem[]
 
-  @@map("transfer_batches")
+  @@map("transfer_batches_fina")
 }
 
 model TransferBatchItem {
@@ -911,7 +911,7 @@ model TransferBatchItem {
 
   batch           TransferBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
-  @@map("transfer_batch_items")
+  @@map("transfer_batch_items_fina")
 }
 
 // ============================================================
@@ -928,7 +928,7 @@ model SalaryJournalMapping {
   isActive        Boolean @default(true)
 
   @@unique([deductionItemName])
-  @@map("salary_journal_mappings")
+  @@map("salary_journal_mappings_fina")
 }
 
 // ============================================================
@@ -949,7 +949,7 @@ model AuditLog {
   @@index([tableName, recordId])
   @@index([userId, timestamp])
   @@index([timestamp])
-  @@map("audit_logs")
+  @@map("audit_logs_fina")
 }
 
 // ============================================================
@@ -965,7 +965,7 @@ model BankMaster {
 
   branches    BranchMaster[]
 
-  @@map("bank_masters")
+  @@map("bank_masters_fina")
 }
 
 model BranchMaster {
@@ -979,5 +979,5 @@ model BranchMaster {
   bank        BankMaster @relation(fields: [bankCode], references: [bankCode])
 
   @@unique([bankCode, branchCode])
-  @@map("branch_masters")
+  @@map("branch_masters_fina")
 }
