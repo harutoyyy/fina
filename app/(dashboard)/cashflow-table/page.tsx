@@ -33,6 +33,8 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  DragOverlay,
+  type DragStartEvent,
   type DragEndEvent,
 } from "@dnd-kit/core"
 import {
@@ -116,6 +118,7 @@ function SortableRow({
   onDoubleClick,
   onRowClick,
   isSelected,
+  isBeingDraggedWithGroup,
 }: {
   row: CashFlowRow
   isClosed: boolean
@@ -126,6 +129,7 @@ function SortableRow({
   onDoubleClick: (row: CashFlowRow) => void
   onRowClick: (row: CashFlowRow) => void
   isSelected: boolean
+  isBeingDraggedWithGroup: boolean
 }) {
   const {
     attributes,
@@ -139,7 +143,7 @@ function SortableRow({
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1,
+    opacity: isDragging ? 0.3 : isBeingDraggedWithGroup ? 0.5 : 1,
   }
 
   const deposit = Number(row.deposit)
@@ -155,7 +159,7 @@ function SortableRow({
     <TableRow
       ref={setNodeRef}
       style={style}
-      className={`cursor-pointer ${isSelected ? "bg-muted/50" : ""}`}
+      className={`cursor-pointer ${isSelected ? "bg-muted/50" : ""} ${isBeingDraggedWithGroup ? "bg-blue-50 dark:bg-blue-950/30" : ""}`}
       onClick={() => onRowClick(row)}
       onDoubleClick={() => onDoubleClick(row)}
     >
@@ -252,6 +256,7 @@ export default function CashFlowTablePage() {
   const [reorderDay, setReorderDay] = useState("")
   const [reorderSaving, setReorderSaving] = useState(false)
   const [prevTableData, setPrevTableData] = useState<CashFlowTableData | null>(null)
+  const [activeDragId, setActiveDragId] = useState<string | null>(null)
 
   const loadAccounts = useCallback(async (companyId: string) => {
     const accts = await getAccounts(companyId)
@@ -422,9 +427,14 @@ export default function CashFlowTablePage() {
     )
   }
 
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveDragId(event.active.id as string)
+  }
+
   const handleDragEnd = (event: DragEndEvent) => {
+    setActiveDragId(null)
     const { active, over } = event
-    if (!over || active.id === over.id || !selectedCompany || !tableData) return
+    if (!over || !selectedCompany || !tableData) return
 
     const draggedId = active.id as string
     // ドラッグした行がチェック済みなら、チェック済み行を全てまとめて移動
@@ -433,8 +443,11 @@ export default function CashFlowTablePage() {
       : new Set([draggedId])
 
     const rows = [...filteredRows]
-    const targetIndex = rows.findIndex((r) => r.id === over.id)
-    if (targetIndex === -1) return
+    const overIndex = rows.findIndex((r) => r.id === over.id)
+    if (overIndex === -1) return
+
+    // ドロップ先が移動対象自身で、かつ1行だけなら何もしない
+    if (active.id === over.id && movedIds.size <= 1) return
 
     // 移動対象の行と残りの行を分離
     const moved: CashFlowRow[] = []
@@ -444,19 +457,24 @@ export default function CashFlowTablePage() {
       else rest.push(r)
     })
 
-    // ドロップ先の行が rest 内の何番目かを計算して挿入位置を決定
-    const overRow = rows.find((r) => r.id === over.id)!
-    let insertPos = rest.indexOf(overRow)
-    if (insertPos === -1) {
-      // ドロップ先もmovedに含まれる場合、元のtargetIndex前後の非移動行を基準にする
+    if (rest.length === 0) return // 全行が選択されている場合は移動不要
+
+    // ドロップ先の行を基準に挿入位置を決定
+    const overRow = rows[overIndex]
+    const restIndex = rest.indexOf(overRow)
+
+    let insertPos: number
+    if (restIndex !== -1) {
+      // ドロップ先が非移動行 → その行の前か後に挿入
+      const draggedOrigIndex = rows.findIndex((r) => r.id === draggedId)
+      insertPos = draggedOrigIndex < overIndex ? restIndex + 1 : restIndex
+    } else {
+      // ドロップ先も移動行 → 元のoverIndex前後の非移動行を基準にする
       insertPos = rest.length
-      for (let i = targetIndex + 1; i < rows.length; i++) {
+      for (let i = overIndex + 1; i < rows.length; i++) {
         const idx = rest.indexOf(rows[i])
         if (idx !== -1) { insertPos = idx; break }
       }
-    } else {
-      // ドロップ先の行の後ろに挿入
-      insertPos += 1
     }
 
     const reordered = [
@@ -464,6 +482,10 @@ export default function CashFlowTablePage() {
       ...moved,
       ...rest.slice(insertPos),
     ]
+
+    // 元の順序と変わっていなければ何もしない
+    const isSame = reordered.every((r, i) => r.id === filteredRows[i]?.id)
+    if (isSame) return
 
     const updates = reordered.map((r, i) => ({ id: r.id, displayOrder: i }))
     const blockStart = reordered.findIndex((r) => movedIds.has(r.id))
@@ -786,7 +808,7 @@ export default function CashFlowTablePage() {
             <p className="text-muted-foreground text-center py-8">取引データがありません</p>
           ) : (
             <div className="overflow-x-auto">
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -828,11 +850,28 @@ export default function CashFlowTablePage() {
                           onDoubleClick={handleRowDoubleClick}
                           onRowClick={setPreviewRow}
                           isSelected={previewRow?.id === row.id}
+                          isBeingDraggedWithGroup={
+                            activeDragId !== null &&
+                            activeDragId !== row.id &&
+                            selectedRows.has(activeDragId) &&
+                            selectedRows.has(row.id)
+                          }
                         />
                       ))}
                     </TableBody>
                   </SortableContext>
                 </Table>
+                <DragOverlay>
+                  {activeDragId && selectedRows.has(activeDragId) && selectedRows.size > 1 ? (
+                    <div className="bg-background border rounded-md shadow-lg p-3 text-sm font-medium">
+                      {selectedRows.size}件の取引を移動中...
+                    </div>
+                  ) : activeDragId ? (
+                    <div className="bg-background border rounded-md shadow-lg p-3 text-sm font-medium">
+                      {filteredRows.find((r) => r.id === activeDragId)?.partnerName || "取引"} を移動中...
+                    </div>
+                  ) : null}
+                </DragOverlay>
               </DndContext>
             </div>
           )}
