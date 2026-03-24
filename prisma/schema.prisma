@@ -734,6 +734,7 @@ model RecurringTemplate {
   fixedAmount     BigInt? // 固定金額
   paymentMethod   PaymentMethod?
   classification  String? // "FIXED","VARIABLE"
+  accountingMonthOffset Int @default(0) // 0=当月, -1=前月, 1=翌月
   summary         String?
   assigneeId      String? // 担当者ID
 

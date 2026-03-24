@@ -43,6 +43,7 @@ export async function createRecurringTemplate(data: {
   fixedAmount?: string
   paymentMethod?: PaymentMethod
   classification?: string
+  accountingMonthOffset?: number
   summary?: string
   assigneeId?: string
 }) {
@@ -67,6 +68,7 @@ export async function createRecurringTemplate(data: {
       fixedAmount: data.fixedAmount ? BigInt(data.fixedAmount) : null,
       paymentMethod: data.paymentMethod || null,
       classification: data.classification || null,
+      accountingMonthOffset: data.accountingMonthOffset ?? 0,
       summary: data.summary || null,
       assigneeId: data.assigneeId || null,
     },
@@ -95,6 +97,7 @@ export async function updateRecurringTemplate(
     fixedAmount?: string | null
     paymentMethod?: PaymentMethod | null
     classification?: string | null
+    accountingMonthOffset?: number
     summary?: string | null
     assigneeId?: string | null
     isActive?: boolean
@@ -124,6 +127,7 @@ export async function updateRecurringTemplate(
   if (data.fixedAmount !== undefined) updateData.fixedAmount = data.fixedAmount ? BigInt(data.fixedAmount) : null
   if (data.paymentMethod !== undefined) updateData.paymentMethod = data.paymentMethod
   if (data.classification !== undefined) updateData.classification = data.classification
+  if (data.accountingMonthOffset !== undefined) updateData.accountingMonthOffset = data.accountingMonthOffset
   if (data.summary !== undefined) updateData.summary = data.summary
   if (data.assigneeId !== undefined) updateData.assigneeId = data.assigneeId
   if (data.isActive !== undefined) updateData.isActive = data.isActive
@@ -234,11 +238,13 @@ export async function generateRecurringTransactions(companyId: string, yearMonth
 
     const dueDate = getDueDate(yearMonth, template.dueDayRule)
 
+    const accountingMonth = applyMonthOffset(yearMonth, template.accountingMonthOffset || 0)
+
     const transactionData: Record<string, unknown> = {
       companyId,
       type: template.transactionType,
       status: "DRAFT",
-      accountingMonth: yearMonth,
+      accountingMonth,
       amount,
       scheduledDate: dueDate,
       summary: template.summary || template.name,
@@ -315,12 +321,169 @@ export async function generateRecurringTransactions(companyId: string, yearMonth
 }
 
 function getPreviousMonth(yearMonth: string): string {
+  return applyMonthOffset(yearMonth, -1)
+}
+
+function applyMonthOffset(yearMonth: string, offset: number): string {
   const [yearStr, monthStr] = yearMonth.split("-")
   let year = parseInt(yearStr)
-  let month = parseInt(monthStr) - 1
-  if (month === 0) {
-    month = 12
+  let month = parseInt(monthStr) + offset
+  while (month < 1) {
+    month += 12
     year -= 1
   }
+  while (month > 12) {
+    month -= 12
+    year += 1
+  }
   return `${year}-${String(month).padStart(2, "0")}`
+}
+
+// 自動生成: lastGeneratedMonth から当月までの未生成月を全て埋める
+export async function autoGenerateRecurringTransactions(companyId: string) {
+  await requireSession()
+  await verifyCompanyAccess(companyId)
+
+  const now = new Date()
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+
+  const templates = await prisma.recurringTemplate.findMany({
+    where: { companyId, isActive: true },
+  })
+
+  const allResults: { templateId: string; templateName: string; transactionId: string; month: string }[] = []
+
+  for (const template of templates) {
+    // 開始月を決定: lastGeneratedMonth の翌月、またはテンプレート作成月
+    let startMonth: string
+    if (template.lastGeneratedMonth) {
+      startMonth = applyMonthOffset(template.lastGeneratedMonth, 1)
+    } else {
+      // テンプレート作成月から開始
+      const created = template.createdAt
+      startMonth = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, "0")}`
+    }
+
+    // startMonth から currentMonth まで全月をループ
+    let targetMonth = startMonth
+    while (targetMonth <= currentMonth) {
+      const [, monthStr] = targetMonth.split("-")
+      const month = parseInt(monthStr)
+
+      if (isTargetMonth(template.frequency, template.specificMonths, month)) {
+        // 金額計算
+        let amount = BigInt(0)
+        if (template.amountType === "FIXED" && template.fixedAmount) {
+          amount = template.fixedAmount
+        } else if (template.amountType === "VARIABLE") {
+          const prevMonth = getPreviousMonth(targetMonth)
+          const prevTransaction = await prisma.transaction.findFirst({
+            where: {
+              companyId,
+              accountingMonth: prevMonth,
+              partnerId: template.partnerId,
+              type: template.transactionType,
+            },
+            orderBy: { createdAt: "desc" },
+          })
+          if (prevTransaction) {
+            amount = prevTransaction.amount
+          }
+        }
+
+        const dueDate = getDueDate(targetMonth, template.dueDayRule)
+        const accountingMonth = applyMonthOffset(targetMonth, template.accountingMonthOffset || 0)
+
+        // 口座を解決
+        let accountId = template.accountId
+        if (!accountId) {
+          const defaultAccount = await prisma.account.findFirst({
+            where: { companyId, isMain: true, isActive: true },
+          })
+          if (defaultAccount) {
+            accountId = defaultAccount.id
+          } else {
+            const anyAccount = await prisma.account.findFirst({
+              where: { companyId, isActive: true },
+            })
+            if (anyAccount) accountId = anyAccount.id
+          }
+        }
+        if (!accountId) {
+          targetMonth = applyMonthOffset(targetMonth, 1)
+          continue
+        }
+
+        const transaction = await prisma.transaction.create({
+          data: {
+            companyId,
+            accountId,
+            type: template.transactionType,
+            status: "DRAFT",
+            accountingMonth,
+            amount,
+            scheduledDate: dueDate,
+            summary: template.summary || template.name,
+            classification: template.classification,
+            paymentMethod: template.paymentMethod,
+            partnerId: template.partnerId,
+          },
+        })
+
+        if (template.midId) {
+          await prisma.transactionDetail.create({
+            data: {
+              transactionId: transaction.id,
+              midId: template.midId,
+              subId: template.subId || null,
+              amount,
+              summary: template.summary || template.name,
+              displayOrder: 0,
+            },
+          })
+        }
+
+        await prisma.recurringTemplate.update({
+          where: { id: template.id },
+          data: { lastGeneratedMonth: targetMonth },
+        })
+
+        allResults.push({
+          templateId: template.id,
+          templateName: template.name,
+          transactionId: transaction.id,
+          month: targetMonth,
+        })
+      }
+
+      targetMonth = applyMonthOffset(targetMonth, 1)
+    }
+  }
+
+  if (allResults.length > 0) {
+    revalidatePath("/recurring")
+    revalidatePath("/expenses")
+    revalidatePath("/sales")
+    revalidatePath("/costs")
+  }
+
+  return allResults
+}
+
+export async function getExpenseTemplates(companyId: string) {
+  await requireSession()
+  await verifyCompanyAccess(companyId)
+
+  const templates = await prisma.recurringTemplate.findMany({
+    where: {
+      companyId,
+      transactionType: "EXPENSE",
+    },
+    include: {
+      company: false,
+    },
+    orderBy: { createdAt: "desc" },
+  })
+
+  return bigintToJson(templates)
 }

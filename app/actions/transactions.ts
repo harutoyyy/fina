@@ -22,6 +22,7 @@ export type TransactionWithRelations = {
   estimatedAmount: string | null
   actualAmount: string | null
   paymentMethod: string | null
+  classification: string | null
   summary: string | null
   parentId: string | null
   invoiceDate: string | null
@@ -125,6 +126,7 @@ export async function createTransaction(data: {
   amount: string
   paymentMethod?: PaymentMethod
   summary?: string
+  classification?: string
   parentId?: string
   invoiceDate?: string
   invoiceAmount?: string
@@ -152,6 +154,7 @@ export async function createTransaction(data: {
       amount: BigInt(data.amount),
       paymentMethod: data.paymentMethod || undefined,
       summary: data.summary || undefined,
+      classification: data.classification || undefined,
       parentId: data.parentId || undefined,
       invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
       invoiceAmount: data.invoiceAmount ? BigInt(data.invoiceAmount) : undefined,
