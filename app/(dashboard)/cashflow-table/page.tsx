@@ -491,35 +491,48 @@ export default function CashFlowTablePage() {
     if (!tableData || !selectedCompany || selectedRows.size === 0) return
 
     const rows = [...filteredRows]
-    const selectedIndices = rows
-      .map((r, i) => (selectedRows.has(r.id) ? i : -1))
-      .filter((i) => i !== -1)
-      .sort((a, b) => a - b)
+    // 選択行と非選択行を分離
+    const selected: CashFlowRow[] = []
+    const rest: CashFlowRow[] = []
+    let firstSelectedIndex = -1
 
-    if (selectedIndices.length === 0) return
-    const first = selectedIndices[0]
-    const last = selectedIndices[selectedIndices.length - 1]
+    rows.forEach((r, i) => {
+      if (selectedRows.has(r.id)) {
+        selected.push(r)
+        if (firstSelectedIndex === -1) firstSelectedIndex = i
+      } else {
+        rest.push(r)
+      }
+    })
 
-    if (direction === "up" && first === 0) return
-    if (direction === "down" && last === rows.length - 1) return
+    if (selected.length === 0) return
 
-    // Move the block of selected rows
-    let reordered: CashFlowRow[]
-    if (direction === "up") {
-      const target = first - 1
-      const item = rows.splice(target, 1)[0]
-      rows.splice(last, 0, item)
-      reordered = rows
-    } else {
-      const target = last + 1
-      const item = rows.splice(target, 1)[0]
-      rows.splice(first, 0, item)
-      reordered = rows
+    // 非選択行のみのリスト内で、選択ブロックの挿入位置を計算
+    // 現在の挿入位置 = firstSelectedIndex の前にある非選択行の数
+    let currentInsertPos = 0
+    for (let i = 0; i < firstSelectedIndex; i++) {
+      if (!selectedRows.has(rows[i].id)) currentInsertPos++
     }
 
+    let newInsertPos: number
+    if (direction === "up") {
+      newInsertPos = Math.max(0, currentInsertPos - 1)
+    } else {
+      newInsertPos = Math.min(rest.length, currentInsertPos + 1)
+    }
+
+    if (newInsertPos === currentInsertPos) return
+
+    // 非選択行リストに選択行ブロックを挿入
+    const reordered = [
+      ...rest.slice(0, newInsertPos),
+      ...selected,
+      ...rest.slice(newInsertPos),
+    ]
+
     const updates = reordered.map((r, i) => ({ id: r.id, displayOrder: i }))
-    const targetIndex = direction === "up" ? first - 1 : first + 1
-    const suggested = getSuggestedDay(reordered, targetIndex)
+    const blockStartIndex = newInsertPos
+    const suggested = getSuggestedDay(reordered, blockStartIndex)
     setReorderDay(suggested)
     setReorderPending({
       reordered,
