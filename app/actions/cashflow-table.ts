@@ -316,7 +316,7 @@ export async function closeMonth(
   })
 
   await createAuditLog({
-    tableName: "month_closes",
+    tableName: "month_closes_fina",
     recordId: result.id,
     operation: "MONTH_CLOSE",
     userId: session.user.id,
@@ -363,7 +363,7 @@ export async function reopenMonth(
   })
 
   await createAuditLog({
-    tableName: "month_closes",
+    tableName: "month_closes_fina",
     recordId: result.id,
     operation: "MONTH_REOPEN",
     userId: session.user.id,
@@ -426,7 +426,7 @@ export async function deferTransaction(
   })
 
   await createAuditLog({
-    tableName: "transactions",
+    tableName: "transactions_fina",
     recordId: transactionId,
     operation: "UPDATE",
     userId: session.user.id,

@@ -51,7 +51,7 @@ export async function createDeductionCategory(data: {
   })
 
   await createAuditLog({
-    tableName: "deduction_categories",
+    tableName: "deduction_categories_fina",
     recordId: result.id,
     operation: "CREATE",
     userId: session.user.id,
@@ -88,7 +88,7 @@ export async function updateDeductionCategory(
   })
 
   await createAuditLog({
-    tableName: "deduction_categories",
+    tableName: "deduction_categories_fina",
     recordId: id,
     operation: "UPDATE",
     userId: session.user.id,
@@ -107,7 +107,7 @@ export async function deleteDeductionCategory(id: string) {
   if (!existing) throw new Error("Deduction category not found")
 
   await createAuditLog({
-    tableName: "deduction_categories",
+    tableName: "deduction_categories_fina",
     recordId: id,
     operation: "DELETE",
     userId: session.user.id,

@@ -173,7 +173,7 @@ export async function createTransaction(data: {
   })
 
   await createAuditLog({
-    tableName: "transactions",
+    tableName: "transactions_fina",
     recordId: result.id,
     operation: "CREATE",
     userId: session.user.id,
@@ -253,7 +253,7 @@ export async function updateTransaction(
   })
 
   await createAuditLog({
-    tableName: "transactions",
+    tableName: "transactions_fina",
     recordId: id,
     operation: monthClosed ? "UPDATE_AFTER_CLOSE" : "UPDATE",
     userId: session.user.id,
@@ -428,7 +428,7 @@ export async function updateTransactionStatus(
 
   const operation = status === "CONFIRMED" ? "CONFIRM" : status === "DRAFT" ? "UNCONFIRM" : "UPDATE"
   await createAuditLog({
-    tableName: "transactions",
+    tableName: "transactions_fina",
     recordId: id,
     operation,
     userId: session.user.id,
@@ -455,7 +455,7 @@ export async function deleteTransaction(id: string, companyId: string) {
   await ensureMonthOpen(companyId, existing.accountingMonth)
 
   await createAuditLog({
-    tableName: "transactions",
+    tableName: "transactions_fina",
     recordId: id,
     operation: "DELETE",
     userId: session.user.id,
@@ -608,7 +608,7 @@ export async function upsertDeductionDetails(
   }
 
   await createAuditLog({
-    tableName: "transaction_details",
+    tableName: "transaction_details_fina",
     recordId: transactionId,
     operation: "UPDATE",
     userId: session.user.id,

@@ -63,7 +63,7 @@ export async function createBank(data: {
   const result = await prisma.bankMaster.create({ data })
 
   await createAuditLog({
-    tableName: "bank_masters",
+    tableName: "bank_masters_fina",
     recordId: result.id,
     operation: "CREATE",
     userId: session.user.id,
@@ -89,7 +89,7 @@ export async function updateBank(
   })
 
   await createAuditLog({
-    tableName: "bank_masters",
+    tableName: "bank_masters_fina",
     recordId: result.id,
     operation: "UPDATE",
     userId: session.user.id,
@@ -111,7 +111,7 @@ export async function createBranch(data: {
   const result = await prisma.branchMaster.create({ data })
 
   await createAuditLog({
-    tableName: "branch_masters",
+    tableName: "branch_masters_fina",
     recordId: result.id,
     operation: "CREATE",
     userId: session.user.id,
@@ -137,7 +137,7 @@ export async function updateBranch(
   })
 
   await createAuditLog({
-    tableName: "branch_masters",
+    tableName: "branch_masters_fina",
     recordId: result.id,
     operation: "UPDATE",
     userId: session.user.id,
@@ -200,7 +200,7 @@ export async function seedMajorBanks() {
   }
 
   await createAuditLog({
-    tableName: "bank_masters",
+    tableName: "bank_masters_fina",
     recordId: "seed",
     operation: "CREATE",
     userId: session.user.id,

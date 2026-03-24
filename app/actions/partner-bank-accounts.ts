@@ -39,7 +39,7 @@ export async function createPartnerBankAccount(data: {
   const result = await prisma.tradingPartnerBankAccount.create({ data: createData })
 
   await createAuditLog({
-    tableName: "trading_partner_bank_accounts",
+    tableName: "trading_partner_bank_accounts_fina",
     recordId: result.id,
     operation: "CREATE",
     userId: session.user.id,
@@ -77,7 +77,7 @@ export async function updatePartnerBankAccount(
   })
 
   await createAuditLog({
-    tableName: "trading_partner_bank_accounts",
+    tableName: "trading_partner_bank_accounts_fina",
     recordId: id,
     operation: "UPDATE",
     userId: session.user.id,
@@ -100,7 +100,7 @@ export async function deletePartnerBankAccount(id: string, companyId: string) {
   if (existing.partner.companyId !== companyId) throw new Error("Unauthorized")
 
   await createAuditLog({
-    tableName: "trading_partner_bank_accounts",
+    tableName: "trading_partner_bank_accounts_fina",
     recordId: id,
     operation: "DELETE",
     userId: session.user.id,

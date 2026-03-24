@@ -61,7 +61,7 @@ export async function createPartnerSite(data: {
   })
 
   await createAuditLog({
-    tableName: "trading_partner_sites",
+    tableName: "trading_partner_sites_fina",
     recordId: result.id,
     operation: "CREATE",
     userId: session.user.id,
@@ -119,7 +119,7 @@ export async function updatePartnerSite(
   })
 
   await createAuditLog({
-    tableName: "trading_partner_sites",
+    tableName: "trading_partner_sites_fina",
     recordId: id,
     operation: "UPDATE",
     userId: session.user.id,
@@ -142,7 +142,7 @@ export async function deletePartnerSite(id: string, companyId: string) {
   if (existing.partner.companyId !== companyId) throw new Error("Unauthorized")
 
   await createAuditLog({
-    tableName: "trading_partner_sites",
+    tableName: "trading_partner_sites_fina",
     recordId: id,
     operation: "DELETE",
     userId: session.user.id,

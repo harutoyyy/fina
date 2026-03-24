@@ -781,7 +781,7 @@ export async function generateSalaryJournalEntries(
   }
 
   await createAuditLog({
-    tableName: "salary_entries",
+    tableName: "salary_entries_fina",
     recordId: salaryEntryId,
     operation: "CREATE",
     userId: session.user.id,
