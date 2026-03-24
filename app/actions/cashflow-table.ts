@@ -72,6 +72,50 @@ export type CashFlowTableData = {
   closingBalance: string
 }
 
+/**
+ * MonthlyBalance レコードがない月の月初残高を、
+ * 直近の MonthlyBalance.closingBalance + 間の月の取引合計から算出する。
+ */
+async function calcOpeningBalance(
+  accountId: string,
+  yearMonth: string
+): Promise<bigint> {
+  // 指定月より前の最新の MonthlyBalance を取得
+  const latestBalance = await prisma.monthlyBalance.findFirst({
+    where: {
+      accountId,
+      yearMonth: { lt: yearMonth },
+    },
+    orderBy: { yearMonth: "desc" },
+  })
+
+  const baseBalance = latestBalance?.closingBalance ?? BigInt(0)
+  const startMonth = latestBalance
+    ? nextYearMonth(latestBalance.yearMonth)
+    : null
+
+  if (!startMonth || startMonth >= yearMonth) {
+    return baseBalance
+  }
+
+  // 起点月から対象月の前月までの取引合計を加算
+  const gap = await prisma.transaction.aggregate({
+    where: {
+      accountId,
+      accountingMonth: { gte: startMonth, lt: yearMonth },
+    },
+    _sum: { amount: true },
+  })
+
+  return baseBalance + (gap._sum.amount ?? BigInt(0))
+}
+
+function nextYearMonth(ym: string): string {
+  const [y, m] = ym.split("-").map(Number)
+  const d = new Date(y, m, 1) // m is already 1-based, so this gives next month
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+}
+
 export async function getCashFlowTable(
   companyId: string,
   accountId: string,
@@ -105,7 +149,12 @@ export async function getCashFlowTable(
     },
   })
 
-  const openingBalance = monthlyBalance?.openingBalance ?? BigInt(0)
+  let openingBalance: bigint
+  if (monthlyBalance) {
+    openingBalance = monthlyBalance.openingBalance
+  } else {
+    openingBalance = await calcOpeningBalance(accountId, yearMonth)
+  }
 
   let runningBalance = openingBalance
   let totalDeposit = BigInt(0)
