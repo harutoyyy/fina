@@ -27,6 +27,10 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     fetch("/api/companies")
       .then((res) => res.json())
       .then((data) => {
+        if (!Array.isArray(data)) {
+          setLoading(false)
+          return
+        }
         setCompanies(data)
         const saved = localStorage.getItem("selectedCompanyId")
         const found = data.find((c: Company) => c.id === saved)
