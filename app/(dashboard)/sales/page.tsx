@@ -105,7 +105,7 @@ export default function SalesPage() {
     if (!selectedCompany) return
     setLoading(true)
     try {
-      const [accs, parts, cats, txns, closed] = await Promise.all([
+      const [accs, parts, cats, txnResult, closed] = await Promise.all([
         getAccounts(selectedCompany.id),
         getPartners(selectedCompany.id),
         getCategories(),
@@ -124,7 +124,7 @@ export default function SalesPage() {
         defaults: p.defaults?.map((d: { midId: string; subId: string | null }) => ({ midId: d.midId, subId: d.subId })) || [],
       })))
       setCategories(cats as MajorCategory[])
-      setTransactions(txns)
+      setTransactions(txnResult.data)
     } catch (e) {
       console.error("Failed to load data:", e)
     } finally {

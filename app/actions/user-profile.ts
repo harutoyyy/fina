@@ -46,6 +46,8 @@ export async function getExpenseBoxItems(
     scheduledDateFrom?: string
     scheduledDateTo?: string
     showReady?: boolean  // true=準備完了も表示、false=未準備完了のみ
+    page?: number
+    pageSize?: number
   }
 ) {
   const session = await requireSession()
@@ -132,9 +134,15 @@ export async function getExpenseBoxItems(
     where.scheduledDate = schedFilter
   }
 
+  const page = filters?.page || 1
+  const pageSize = filters?.pageSize || 100
+
+  const total = await prisma.transaction.count({ where })
   const transactions = await prisma.transaction.findMany({
     where,
     orderBy: [{ scheduledDate: "asc" }, { createdAt: "asc" }],
+    skip: (page - 1) * pageSize,
+    take: pageSize,
     include: {
       account: { select: { id: true, bankName: true, branchName: true, accountNumber: true } },
       partner: { select: { id: true, name: true } },
@@ -187,6 +195,8 @@ export async function getExpenseBoxItems(
       summary: d.summary,
     })),
   }))
+
+  return { data: items, total, totalPages: Math.ceil(total / pageSize) }
 }
 
 // ============================================================

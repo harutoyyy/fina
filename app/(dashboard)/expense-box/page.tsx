@@ -108,11 +108,11 @@ export default function ExpenseBoxPage() {
       if (scheduledDateFrom) filters.scheduledDateFrom = scheduledDateFrom
       if (scheduledDateTo) filters.scheduledDateTo = scheduledDateTo
 
-      const [expData, userProfile] = await Promise.all([
+      const [expResult, userProfile] = await Promise.all([
         getExpenseBoxItems(selectedCompany.id, filters),
         getCurrentUserProfile(),
       ])
-      setExpenses(expData)
+      setExpenses(expResult.data)
       setProfile(userProfile)
     } catch (e) {
       console.error("Failed to load expense box data:", e)

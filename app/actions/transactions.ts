@@ -99,8 +99,9 @@ export async function getTransactions(
   companyId: string,
   type: TransactionType,
   accountingMonth?: string,
-  status?: TransactionStatus
-): Promise<TransactionWithRelations[]> {
+  status?: TransactionStatus,
+  pagination?: { page: number; pageSize: number }
+): Promise<{ data: TransactionWithRelations[]; total: number }> {
   await requireSession()
   const where: Record<string, unknown> = {
     companyId,
@@ -110,13 +111,15 @@ export async function getTransactions(
   if (accountingMonth) where.accountingMonth = accountingMonth
   if (status) where.status = status
 
+  const total = await prisma.transaction.count({ where })
   const transactions = await prisma.transaction.findMany({
     where,
     orderBy: [{ transactionDate: "desc" }, { createdAt: "desc" }],
     include: transactionInclude,
+    ...(pagination ? { skip: (pagination.page - 1) * pagination.pageSize, take: pagination.pageSize } : {}),
   })
 
-  return bigintToJson(transactions) as TransactionWithRelations[]
+  return { data: bigintToJson(transactions) as TransactionWithRelations[], total }
 }
 
 export async function createTransaction(data: {
@@ -504,6 +507,95 @@ export async function setEvidenceNotRequired(id: string, companyId: string, valu
   revalidatePath("/expenses")
   revalidatePath("/expense-box")
   return bigintToJson(result)
+}
+
+// T-13: 仮取引先 → 正規取引先への正規化（管理者のみ）
+export async function normalizePartner(
+  transactionId: string,
+  companyId: string,
+  partnerId: string,
+  registerBankAccount?: boolean // 仮口座を正式口座として登録するか
+) {
+  const session = await requireSession()
+  const role = await getUserRole(session.user.id)
+  if (role !== "ADMIN") {
+    throw new Error("取引先の正規化は管理者のみ実行できます")
+  }
+
+  const existing = await prisma.transaction.findUnique({
+    where: { id: transactionId },
+    include: { temporaryBankAccount: true },
+  })
+  if (!existing || existing.companyId !== companyId) {
+    throw new Error("Transaction not found")
+  }
+  if (!existing.temporaryVendorName && existing.partnerId) {
+    throw new Error("この取引は既に正規取引先が設定されています")
+  }
+
+  const beforeData = {
+    partnerId: existing.partnerId,
+    temporaryVendorName: existing.temporaryVendorName,
+  }
+
+  // 仮口座を正式口座として登録
+  if (registerBankAccount && existing.temporaryBankAccount) {
+    const tmpAcct = existing.temporaryBankAccount
+    await prisma.tradingPartnerBankAccount.create({
+      data: {
+        partnerId,
+        bankCode: tmpAcct.bankCode,
+        branchCode: tmpAcct.branchCode,
+        accountType: tmpAcct.accountType,
+        accountNumber: tmpAcct.accountNumber,
+        accountHolder: tmpAcct.accountHolder,
+      },
+    })
+    // 仮口座を削除
+    await prisma.temporaryBankAccount.delete({ where: { id: tmpAcct.id } })
+  }
+
+  // 正規取引先に紐付け、仮取引先名をクリア
+  const result = await prisma.transaction.update({
+    where: { id: transactionId },
+    data: {
+      partnerId,
+      temporaryVendorName: null,
+    },
+    include: transactionInclude,
+  })
+
+  await createAuditLog({
+    tableName: "transactions_fina",
+    recordId: transactionId,
+    operation: "PARTNER_NORMALIZED",
+    userId: session.user.id,
+    beforeData,
+    afterData: { partnerId, temporaryVendorName: null },
+  })
+
+  revalidatePath("/expenses")
+  revalidatePath("/expense-box")
+  revalidatePath("/cashflow-table")
+  return bigintToJson(result)
+}
+
+// 仮取引先名を持つ取引を一覧取得（管理者用）
+export async function getTemporaryVendorTransactions(companyId: string) {
+  await requireSession()
+  const transactions = await prisma.transaction.findMany({
+    where: {
+      companyId,
+      temporaryVendorName: { not: null },
+      partnerId: null,
+    },
+    orderBy: { createdAt: "desc" },
+    include: {
+      ...transactionInclude,
+      temporaryBankAccount: true,
+    },
+  })
+  return bigintToJson(transactions)
 }
 
 export async function deleteTransaction(id: string, companyId: string) {

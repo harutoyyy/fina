@@ -94,7 +94,7 @@ export default function CostsPage() {
     if (!selectedCompany) return
     setLoading(true)
     try {
-      const [accts, ptns, txns, closed] = await Promise.all([
+      const [accts, ptns, txnResult, closed] = await Promise.all([
         getAccounts(selectedCompany.id),
         getPartners(selectedCompany.id),
         getTransactions(
@@ -108,7 +108,7 @@ export default function CostsPage() {
       setAccounts(accts.map((a) => ({ id: a.id, bankName: a.bankName, branchName: a.branchName, accountNumber: a.accountNumber })))
       setPartners(ptns.map((p) => ({ id: p.id, name: p.name })))
       setMonthClosed(closed)
-      setTransactions(txns)
+      setTransactions(txnResult.data)
     } catch (e) {
       console.error("Failed to load data", e)
     } finally {

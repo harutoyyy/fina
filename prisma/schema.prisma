@@ -545,11 +545,16 @@ model Evidence {
   id              String  @id @default(cuid())
   transactionId   String
   fileName        String
-  fileUrl         String  // S3 URL
+  fileUrl         String  // Storage path
   fileSize        Int?
   mimeType        String?
   uploadedBy      String
   uploadedAt      DateTime @default(now())
+
+  // T-11: メタ情報（手入力 or OCR）
+  metaTransactionDate DateTime? // 証憑上の取引日
+  metaVendorName      String?   // 証憑上の取引先名
+  metaAmount          BigInt?   // 証憑上の金額
 
   transaction     Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 

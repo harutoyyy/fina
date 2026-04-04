@@ -23,6 +23,7 @@ import {
   updateTransactionStatus,
   deleteTransaction,
   upsertTransactionDetails,
+  normalizePartner,
   type TransactionWithRelations,
 } from "@/app/actions/transactions"
 import { createFundTransfer } from "@/app/actions/fund-transfers"
@@ -200,6 +201,12 @@ export default function ExpensesPage() {
   const [createFundTransferFlag, setCreateFundTransferFlag] = useState(false)
   const [fundTransferSourceId, setFundTransferSourceId] = useState("")
   const [fundTransferDate, setFundTransferDate] = useState("")
+  // T-13: 正規化ダイアログ
+  const [normalizeDialogOpen, setNormalizeDialogOpen] = useState(false)
+  const [normalizeTargetId, setNormalizeTargetId] = useState<string | null>(null)
+  const [normalizePartnerId, setNormalizePartnerId] = useState("")
+  const [normalizeRegisterBank, setNormalizeRegisterBank] = useState(false)
+  const [normalizeLoading, setNormalizeLoading] = useState(false)
 
   const mainAccountId = accounts.find((a) => a.isMain)?.id || ""
   const showFundTransferOption = tempForm.accountId && tempForm.accountId !== mainAccountId && !editingId
@@ -262,11 +269,11 @@ export default function ExpensesPage() {
       } else {
         statusFilter = filterStatus as "DRAFT" | "READY" | "CONFIRMED" | "CANCELLED"
       }
-      const [data, closed] = await Promise.all([
+      const [result, closed] = await Promise.all([
         getTransactions(companyId, "EXPENSE", filterMonth || undefined, statusFilter),
         filterMonth ? checkMonthClosed(companyId, filterMonth) : Promise.resolve(false),
       ])
-      let filtered = data.filter((t) => t.classification === "TEMPORARY")
+      let filtered = result.data.filter((t) => t.classification === "TEMPORARY")
       // 支払月BOX: scheduledDate の属する月でフィルタ（休日調整後の実行予定日ベース）
       if (filterMonth) {
         filtered = filtered.filter((t) => {
@@ -607,6 +614,28 @@ export default function ExpensesPage() {
     loadTransactions(selectedCompany.id)
   }
 
+  // T-13: 正規化
+  const openNormalizeDialog = (txId: string) => {
+    setNormalizeTargetId(txId)
+    setNormalizePartnerId("")
+    setNormalizeRegisterBank(false)
+    setNormalizeDialogOpen(true)
+  }
+
+  const handleNormalize = async () => {
+    if (!selectedCompany || !normalizeTargetId || !normalizePartnerId) return
+    setNormalizeLoading(true)
+    try {
+      await normalizePartner(normalizeTargetId, selectedCompany.id, normalizePartnerId, normalizeRegisterBank)
+      setNormalizeDialogOpen(false)
+      loadTransactions(selectedCompany.id)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "正規化に失敗しました")
+    } finally {
+      setNormalizeLoading(false)
+    }
+  }
+
   // ============================================================
   // レンダリング
   // ============================================================
@@ -778,7 +807,18 @@ export default function ExpensesPage() {
                             )}
                           </TableCell>
                           <TableCell className="whitespace-nowrap">{tx.scheduledDate ? formatDate(tx.scheduledDate) : (tx.transactionDate ? formatDate(tx.transactionDate) : "—")}</TableCell>
-                          <TableCell>{tx.partner?.name || (tx.temporaryVendorName ? <span className="text-orange-600">{tx.temporaryVendorName}（仮）</span> : "—")}</TableCell>
+                          <TableCell>
+                            {tx.partner?.name || (tx.temporaryVendorName ? (
+                              <div className="flex items-center gap-1">
+                                <span className="text-orange-600">{tx.temporaryVendorName}（仮）</span>
+                                {isAdmin && (
+                                  <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1" onClick={() => openNormalizeDialog(tx.id)}>
+                                    正規化
+                                  </Button>
+                                )}
+                              </div>
+                            ) : "—")}
+                          </TableCell>
                           {!isOperator && (
                             <TableCell>
                               {detail?.mid?.name || "—"}
@@ -1123,6 +1163,43 @@ export default function ExpensesPage() {
           onOpenChange={(open) => { if (!open) setEvidenceTargetId(null) }}
         />
       )}
+
+      {/* T-13: 正規化ダイアログ */}
+      <Dialog open={normalizeDialogOpen} onOpenChange={setNormalizeDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>取引先を正規化</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>正規取引先を選択</Label>
+              <Select value={normalizePartnerId} onValueChange={setNormalizePartnerId}>
+                <SelectTrigger><SelectValue placeholder="取引先を選択" /></SelectTrigger>
+                <SelectContent>
+                  {partners.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {normalizeTargetId && transactions.find(t => t.id === normalizeTargetId)?.temporaryVendorName && (
+              <p className="text-sm text-muted-foreground">
+                仮取引先名「{transactions.find(t => t.id === normalizeTargetId)?.temporaryVendorName}」を正規取引先に紐付けます
+              </p>
+            )}
+            <div className="flex items-center gap-2">
+              <Switch checked={normalizeRegisterBank} onCheckedChange={setNormalizeRegisterBank} />
+              <Label className="text-sm">仮口座を正式口座として登録する</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNormalizeDialogOpen(false)}>キャンセル</Button>
+            <Button onClick={handleNormalize} disabled={!normalizePartnerId || normalizeLoading}>
+              {normalizeLoading ? "処理中..." : "正規化"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
