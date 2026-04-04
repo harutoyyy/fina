@@ -182,7 +182,7 @@ export async function getCashFlowTable(
       classification: tx.classification,
       status: tx.status,
       partnerId: tx.partner?.id ?? null,
-      partnerName: tx.partner?.name ?? null,
+      partnerName: tx.partner?.name ?? tx.temporaryVendorName ?? null,
       amount: amount.toString(),
       deposit: amount > BigInt(0) ? amount.toString() : "0",
       withdrawal: amount < BigInt(0) ? amount.toString() : "0",

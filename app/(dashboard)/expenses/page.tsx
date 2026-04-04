@@ -37,6 +37,7 @@ import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
 import { Checkbox } from "@/components/ui/checkbox"
 import EvidencePanel from "@/components/evidence-panel"
 import { Paperclip } from "lucide-react"
+import { getCurrentUserProfile, type CurrentUserProfile } from "@/app/actions/user-profile"
 
 type AccountOption = {
   id: string
@@ -136,6 +137,7 @@ const OFFSET_LABELS: Record<number, string> = {
 const initialTempFormState = {
   accountId: "",
   partnerId: "",
+  temporaryVendorName: "",
   transactionDate: "",
   accountingMonth: getCurrentMonth(),
   paymentMethod: "BANK_TRANSFER" as "BANK_TRANSFER" | "DIRECT_DEBIT" | "CASH_WITHDRAWAL",
@@ -170,6 +172,9 @@ export default function ExpensesPage() {
   const [accounts, setAccounts] = useState<AccountOption[]>([])
   const [partners, setPartners] = useState<PartnerOption[]>([])
   const [categories, setCategories] = useState<MajorCategory[]>([])
+  const [userProfile, setUserProfile] = useState<CurrentUserProfile | null>(null)
+  const isAdmin = userProfile?.role === "ADMIN"
+  const isOperator = userProfile?.role === "OPERATOR"
 
   // テンプレート（固定/変動）
   const [templates, setTemplates] = useState<ExpenseTemplate[]>([])
@@ -183,7 +188,10 @@ export default function ExpensesPage() {
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [filterMonth, setFilterMonth] = useState(getCurrentMonth())
-  const [filterStatus, setFilterStatus] = useState<string>("ALL")
+  const [filterStatus, setFilterStatus] = useState<string>("UNCONFIRMED")
+  const [showConfirmed, setShowConfirmed] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchLoading, setBatchLoading] = useState(false)
   const [tempForm, setTempForm] = useState(initialTempFormState)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [tempDialogOpen, setTempDialogOpen] = useState(false)
@@ -215,11 +223,13 @@ export default function ExpensesPage() {
   // データ読み込み
   // ============================================================
   const loadMasterData = useCallback(async (companyId: string) => {
-    const [accts, parts, cats] = await Promise.all([
+    const [accts, parts, cats, profile] = await Promise.all([
       getAccounts(companyId),
       getPartners(companyId),
       getCategories(),
+      getCurrentUserProfile(),
     ])
+    setUserProfile(profile)
     setAccounts(accts.filter((a) => a.isActive).map((a) => ({
       id: a.id,
       bankName: a.bankName,
@@ -243,18 +253,45 @@ export default function ExpensesPage() {
   const loadTransactions = useCallback(async (companyId: string) => {
     setLoading(true)
     try {
-      const statusFilter = filterStatus === "ALL" ? undefined : (filterStatus as "DRAFT" | "READY" | "CONFIRMED" | "CANCELLED")
+      // UNCONFIRMED = DRAFT + READY, ALL = 全ステータス, or specific status
+      let statusFilter: "DRAFT" | "READY" | "CONFIRMED" | "CANCELLED" | undefined
+      if (filterStatus === "UNCONFIRMED") {
+        statusFilter = undefined // fetch all, then client-side filter
+      } else if (filterStatus === "ALL") {
+        statusFilter = undefined
+      } else {
+        statusFilter = filterStatus as "DRAFT" | "READY" | "CONFIRMED" | "CANCELLED"
+      }
       const [data, closed] = await Promise.all([
         getTransactions(companyId, "EXPENSE", filterMonth || undefined, statusFilter),
         filterMonth ? checkMonthClosed(companyId, filterMonth) : Promise.resolve(false),
       ])
-      // 臨時タブ: classification=TEMPORARY のみ表示
-      setTransactions(data.filter((t) => t.classification === "TEMPORARY"))
+      let filtered = data.filter((t) => t.classification === "TEMPORARY")
+      // UNCONFIRMED: DRAFT + READY のみ（確定表示チェックで CONFIRMED も混在可能）
+      if (filterStatus === "UNCONFIRMED") {
+        if (showConfirmed) {
+          filtered = filtered.filter((t) => ["DRAFT", "READY", "CONFIRMED"].includes(t.status))
+        } else {
+          filtered = filtered.filter((t) => ["DRAFT", "READY"].includes(t.status))
+        }
+      }
+      // ソート: scheduledDate 昇順 → 取引先名順
+      filtered.sort((a, b) => {
+        const dateA = a.scheduledDate || a.transactionDate || ""
+        const dateB = b.scheduledDate || b.transactionDate || ""
+        if (dateA < dateB) return -1
+        if (dateA > dateB) return 1
+        const nameA = a.partner?.name || a.temporaryVendorName || ""
+        const nameB = b.partner?.name || b.temporaryVendorName || ""
+        return nameA.localeCompare(nameB, "ja")
+      })
+      setTransactions(filtered)
       setMonthClosed(closed)
+      setSelectedIds(new Set())
     } finally {
       setLoading(false)
     }
-  }, [filterMonth, filterStatus])
+  }, [filterMonth, filterStatus, showConfirmed])
 
   useEffect(() => {
     if (selectedCompany) {
@@ -424,13 +461,15 @@ export default function ExpensesPage() {
   }
 
   const handleTempSubmit = async () => {
-    if (!selectedCompany || !tempForm.accountId || !tempForm.amount || !tempForm.midId) return
+    if (!selectedCompany || !tempForm.accountId || !tempForm.amount) return
+    if (!isOperator && !tempForm.midId) return // ADMIN は科目必須、OPERATOR は不要
     setSubmitting(true)
     try {
       if (editingId) {
         await updateTransaction(editingId, selectedCompany.id, {
           accountId: tempForm.accountId,
           partnerId: tempForm.partnerId || null,
+          temporaryVendorName: tempForm.partnerId ? null : (tempForm.temporaryVendorName || null),
           transactionDate: tempForm.transactionDate || null,
           accountingMonth: tempForm.accountingMonth,
           amount: tempForm.amount,
@@ -450,6 +489,7 @@ export default function ExpensesPage() {
           companyId: selectedCompany.id,
           accountId: tempForm.accountId,
           partnerId: tempForm.partnerId || undefined,
+          temporaryVendorName: tempForm.partnerId ? undefined : (tempForm.temporaryVendorName || undefined),
           type: "EXPENSE",
           transactionDate: tempForm.transactionDate || undefined,
           accountingMonth: tempForm.accountingMonth,
@@ -491,6 +531,7 @@ export default function ExpensesPage() {
     setTempForm({
       accountId: tx.account.id,
       partnerId: tx.partner?.id || "",
+      temporaryVendorName: tx.temporaryVendorName || "",
       transactionDate: tx.transactionDate ? tx.transactionDate.split("T")[0] : "",
       accountingMonth: tx.accountingMonth,
       paymentMethod: (tx.paymentMethod as "BANK_TRANSFER" | "DIRECT_DEBIT" | "CASH_WITHDRAWAL") || "BANK_TRANSFER",
@@ -507,6 +548,47 @@ export default function ExpensesPage() {
     if (!selectedCompany) return
     await updateTransactionStatus(id, selectedCompany.id, status)
     loadTransactions(selectedCompany.id)
+  }
+
+  const handleBatchReady = async () => {
+    if (!selectedCompany || selectedIds.size === 0) return
+    setBatchLoading(true)
+    try {
+      const targets = transactions.filter((t) => selectedIds.has(t.id) && t.status === "DRAFT")
+      const errors: string[] = []
+      for (const tx of targets) {
+        try {
+          await updateTransactionStatus(tx.id, selectedCompany.id, "READY")
+        } catch (e) {
+          const partnerName = tx.partner?.name || tx.temporaryVendorName || tx.id
+          errors.push(`${partnerName}: ${e instanceof Error ? e.message : "エラー"}`)
+        }
+      }
+      if (errors.length > 0) {
+        alert(`一部の準備完了に失敗しました:\n${errors.join("\n")}`)
+      }
+      await loadTransactions(selectedCompany.id)
+    } finally {
+      setBatchLoading(false)
+    }
+  }
+
+  const toggleSelectAll = () => {
+    const draftIds = transactions.filter((t) => t.status === "DRAFT").map((t) => t.id)
+    if (draftIds.every((id) => selectedIds.has(id))) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(draftIds))
+    }
+  }
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
   const handleDeleteTemp = async (id: string) => {
@@ -566,7 +648,7 @@ export default function ExpensesPage() {
                       <TableRow>
                         <TableHead>名称</TableHead>
                         <TableHead>取引先</TableHead>
-                        <TableHead>勘定科目</TableHead>
+                        {!isOperator && <TableHead>勘定科目</TableHead>}
                         <TableHead>支払日</TableHead>
                         <TableHead>計上月</TableHead>
                         <TableHead>支払方法</TableHead>
@@ -584,7 +666,7 @@ export default function ExpensesPage() {
                           <TableRow key={t.id}>
                             <TableCell className="font-medium">{t.name}</TableCell>
                             <TableCell>{partnerName || "—"}</TableCell>
-                            <TableCell>{midCat?.name || "—"}</TableCell>
+                            {!isOperator && <TableCell>{midCat?.name || "—"}</TableCell>}
                             <TableCell>{DUE_DAY_LABELS[t.dueDayRule] || t.dueDayRule}</TableCell>
                             <TableCell>{OFFSET_LABELS[t.accountingMonthOffset] ?? `${t.accountingMonthOffset}ヶ月`}</TableCell>
                             <TableCell>{t.paymentMethod ? PAYMENT_METHOD_LABELS[t.paymentMethod] || t.paymentMethod : "—"}</TableCell>
@@ -619,25 +701,31 @@ export default function ExpensesPage() {
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
-                <CardTitle>臨時経費一覧</CardTitle>
+                <CardTitle>支払月BOX — 臨時経費</CardTitle>
                 <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2">
                     <Label className="text-sm whitespace-nowrap">月</Label>
                     <Input type="month" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="w-40" />
                   </div>
                   <div className="flex items-center gap-2">
-                    <Label className="text-sm whitespace-nowrap">状態</Label>
-                    <Select value={filterStatus} onValueChange={setFilterStatus}>
-                      <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="ALL">すべて</SelectItem>
-                        <SelectItem value="DRAFT">下書き</SelectItem>
-                        <SelectItem value="READY">準備完了</SelectItem>
-                        <SelectItem value="CONFIRMED">確定済</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Checkbox
+                      id="showConfirmed"
+                      checked={showConfirmed}
+                      onCheckedChange={(v) => setShowConfirmed(v === true)}
+                    />
+                    <Label htmlFor="showConfirmed" className="text-sm">確定済も表示</Label>
                   </div>
-                  <Button onClick={() => { setTempForm(initialTempFormState); setEditingId(null); setTempDialogOpen(true) }}>新規経費</Button>
+                  {selectedIds.size > 0 && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={batchLoading}
+                      onClick={handleBatchReady}
+                    >
+                      選択を準備完了 ({selectedIds.size})
+                    </Button>
+                  )}
+                  <Button onClick={() => { setTempForm({ ...initialTempFormState, accountId: mainAccountId }); setEditingId(null); setTempDialogOpen(true) }}>新規経費</Button>
                 </div>
               </div>
             </CardHeader>
@@ -650,9 +738,15 @@ export default function ExpensesPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>支払日</TableHead>
+                      <TableHead className="w-8">
+                        <Checkbox
+                          checked={transactions.filter(t => t.status === "DRAFT").length > 0 && transactions.filter(t => t.status === "DRAFT").every(t => selectedIds.has(t.id))}
+                          onCheckedChange={toggleSelectAll}
+                        />
+                      </TableHead>
+                      <TableHead>予定日</TableHead>
                       <TableHead>支払先</TableHead>
-                      <TableHead>勘定科目</TableHead>
+                      {!isOperator && <TableHead>勘定科目</TableHead>}
                       <TableHead>支払方法</TableHead>
                       <TableHead className="text-right">金額</TableHead>
                       <TableHead>摘要</TableHead>
@@ -665,13 +759,28 @@ export default function ExpensesPage() {
                       const detail = tx.details[0]
                       return (
                         <TableRow key={tx.id}>
-                          <TableCell>{tx.transactionDate ? formatDate(tx.transactionDate) : "—"}</TableCell>
-                          <TableCell>{tx.partner?.name || "—"}</TableCell>
                           <TableCell>
-                            {detail?.mid?.name || "—"}
-                            {detail?.sub?.name ? ` / ${detail.sub.name}` : ""}
+                            {tx.status === "DRAFT" && (
+                              <Checkbox
+                                checked={selectedIds.has(tx.id)}
+                                onCheckedChange={() => toggleSelect(tx.id)}
+                              />
+                            )}
                           </TableCell>
-                          <TableCell>{tx.paymentMethod ? PAYMENT_METHOD_LABELS[tx.paymentMethod] || tx.paymentMethod : "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap">{tx.scheduledDate ? formatDate(tx.scheduledDate) : (tx.transactionDate ? formatDate(tx.transactionDate) : "—")}</TableCell>
+                          <TableCell>{tx.partner?.name || (tx.temporaryVendorName ? <span className="text-orange-600">{tx.temporaryVendorName}（仮）</span> : "—")}</TableCell>
+                          {!isOperator && (
+                            <TableCell>
+                              {detail?.mid?.name || "—"}
+                              {detail?.sub?.name ? ` / ${detail.sub.name}` : ""}
+                            </TableCell>
+                          )}
+                          <TableCell>
+                            {tx.paymentMethod ? PAYMENT_METHOD_LABELS[tx.paymentMethod] || tx.paymentMethod : "—"}
+                            {isOperator && !detail?.mid?.name && (
+                              <Badge variant="destructive" className="ml-2 text-[10px]">⚠ 科目未設定</Badge>
+                            )}
+                          </TableCell>
                           <TableCell className="text-right font-mono">{formatYen(Number(tx.amount))}</TableCell>
                           <TableCell className="max-w-[200px] truncate">{tx.summary || "—"}</TableCell>
                           <TableCell>
@@ -883,6 +992,16 @@ export default function ExpensesPage() {
                   </SelectContent>
                 </Select>
               </div>
+              {!tempForm.partnerId && (
+                <div className="space-y-2">
+                  <Label>仮取引先名</Label>
+                  <Input
+                    placeholder="正規取引先が未登録の場合に入力"
+                    value={tempForm.temporaryVendorName}
+                    onChange={(e) => setTempForm((p) => ({ ...p, temporaryVendorName: e.target.value }))}
+                  />
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
@@ -910,28 +1029,32 @@ export default function ExpensesPage() {
                 <Label>金額 *</Label>
                 <Input type="number" placeholder="0" value={tempForm.amount} onChange={(e) => setTempForm((p) => ({ ...p, amount: e.target.value }))} disabled={editingId !== null && monthClosed} />
               </div>
-              <div className="space-y-2">
-                <Label>勘定科目（中項目） *</Label>
-                <Select value={tempForm.midId} onValueChange={handleTempMidChange}>
-                  <SelectTrigger><SelectValue placeholder="科目を選択" /></SelectTrigger>
-                  <SelectContent>
-                    {expenseMidCategories.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>補助科目（小項目）</Label>
-                <Select value={tempForm.subId} onValueChange={(v) => setTempForm((p) => ({ ...p, subId: v }))} disabled={tempSubCategories.length === 0}>
-                  <SelectTrigger><SelectValue placeholder={tempSubCategories.length === 0 ? "なし" : "選択"} /></SelectTrigger>
-                  <SelectContent>
-                    {tempSubCategories.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {!isOperator && (
+                <>
+                  <div className="space-y-2">
+                    <Label>勘定科目（中項目） *</Label>
+                    <Select value={tempForm.midId} onValueChange={handleTempMidChange}>
+                      <SelectTrigger><SelectValue placeholder="科目を選択" /></SelectTrigger>
+                      <SelectContent>
+                        {expenseMidCategories.map((m) => (
+                          <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>補助科目（小項目）</Label>
+                    <Select value={tempForm.subId} onValueChange={(v) => setTempForm((p) => ({ ...p, subId: v }))} disabled={tempSubCategories.length === 0}>
+                      <SelectTrigger><SelectValue placeholder={tempSubCategories.length === 0 ? "なし" : "選択"} /></SelectTrigger>
+                      <SelectContent>
+                        {tempSubCategories.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
             </div>
             <div className="space-y-2">
               <Label>摘要</Label>

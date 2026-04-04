@@ -30,6 +30,10 @@ export type TransactionWithRelations = {
   recordedAmount: string | null
   transferAmount: string | null
   hasEvidence: boolean
+  evidenceNotRequired: boolean
+  receivedDate: string | null
+  temporaryVendorName: string | null
+  isDateException: boolean
   confirmedAt: string | null
   confirmedBy: string | null
   createdAt: string
@@ -119,6 +123,7 @@ export async function createTransaction(data: {
   companyId: string
   accountId: string
   partnerId?: string
+  temporaryVendorName?: string
   type: TransactionType
   transactionDate?: string
   scheduledDate?: string
@@ -140,6 +145,10 @@ export async function createTransaction(data: {
   }[]
 }) {
   const session = await requireSession()
+  const role = await getUserRole(session.user.id)
+  if (role === "VIEWER") {
+    throw new Error("閲覧者は経費を作成できません")
+  }
   await ensureMonthOpen(data.companyId, data.accountingMonth)
 
   const result = await prisma.transaction.create({
@@ -147,6 +156,7 @@ export async function createTransaction(data: {
       companyId: data.companyId,
       accountId: data.accountId,
       partnerId: data.partnerId || undefined,
+      temporaryVendorName: data.temporaryVendorName || undefined,
       type: data.type,
       transactionDate: data.transactionDate ? new Date(data.transactionDate) : undefined,
       scheduledDate: data.scheduledDate ? new Date(data.scheduledDate) : undefined,
@@ -195,6 +205,7 @@ export async function updateTransaction(
   data: {
     accountId?: string
     partnerId?: string | null
+    temporaryVendorName?: string | null
     transactionDate?: string | null
     scheduledDate?: string | null
     accountingMonth?: string
@@ -208,6 +219,10 @@ export async function updateTransaction(
   }
 ) {
   const session = await requireSession()
+  const role = await getUserRole(session.user.id)
+  if (role === "VIEWER") {
+    throw new Error("閲覧者は経費を編集できません")
+  }
 
   const existing = await prisma.transaction.findUnique({ where: { id } })
   if (!existing || existing.companyId !== companyId) {
@@ -238,8 +253,18 @@ export async function updateTransaction(
   const updateData: Record<string, unknown> = {}
   if (data.accountId !== undefined) updateData.accountId = data.accountId
   if (data.partnerId !== undefined) updateData.partnerId = data.partnerId
+  if (data.temporaryVendorName !== undefined) updateData.temporaryVendorName = data.temporaryVendorName
   if (data.transactionDate !== undefined) updateData.transactionDate = data.transactionDate ? new Date(data.transactionDate) : null
-  if (data.scheduledDate !== undefined) updateData.scheduledDate = data.scheduledDate ? new Date(data.scheduledDate) : null
+  if (data.scheduledDate !== undefined) {
+    updateData.scheduledDate = data.scheduledDate ? new Date(data.scheduledDate) : null
+    // T-09: 繰り返しテンプレート由来の明細で予定日を手変更した場合、isDateException = true
+    if (existing.recurringTemplateId && data.scheduledDate) {
+      const origDate = existing.scheduledDate?.toISOString().split("T")[0] ?? ""
+      if (origDate !== data.scheduledDate) {
+        updateData.isDateException = true
+      }
+    }
+  }
   if (data.accountingMonth !== undefined) updateData.accountingMonth = data.accountingMonth
   if (data.amount !== undefined) updateData.amount = BigInt(data.amount)
   if (data.paymentMethod !== undefined) updateData.paymentMethod = data.paymentMethod
@@ -285,19 +310,19 @@ async function getUserRole(userId: string): Promise<string> {
   return profile?.role || "OPERATOR"
 }
 
-async function validateExpenseReady(tx: { id: string; partnerId: string | null; hasEvidence: boolean }) {
-  if (!tx.partnerId) {
-    throw new Error("準備完了には取引先が必要です")
+async function validateExpenseReady(tx: { id: string; partnerId: string | null; temporaryVendorName: string | null; hasEvidence: boolean; evidenceNotRequired: boolean }) {
+  if (!tx.partnerId && !tx.temporaryVendorName) {
+    throw new Error("準備完了には取引先（または仮取引先名）が必要です")
   }
-  if (!tx.hasEvidence) {
-    throw new Error("準備完了には証憑添付が必要です")
-  }
-  if (tx.partnerId && !tx.hasEvidence) {
-    throw new Error("準備完了には取引先と証憑添付が必要です")
+  if (!tx.hasEvidence && !tx.evidenceNotRequired) {
+    throw new Error("準備完了には証憑添付（または証憑なしOK）が必要です")
   }
 }
 
-async function validateExpenseConfirmed(tx: { id: string }) {
+async function validateExpenseConfirmed(tx: { id: string; partnerId: string | null; temporaryVendorName: string | null }) {
+  if (!tx.partnerId) {
+    throw new Error("確定には正規取引先の登録が必要です。仮取引先名を正規化してください")
+  }
   const details = await prisma.transactionDetail.findMany({
     where: { transactionId: tx.id },
   })
@@ -373,6 +398,10 @@ export async function updateTransactionStatus(
   const session = await requireSession()
   const role = await getUserRole(session.user.id)
 
+  if (role === "VIEWER") {
+    throw new Error("閲覧者はステータス変更できません")
+  }
+
   const existing = await prisma.transaction.findUnique({ where: { id } })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Transaction not found")
@@ -445,8 +474,44 @@ export async function updateTransactionStatus(
   return bigintToJson(result)
 }
 
+// T-03: 証憑なしOKフラグの設定（管理者のみ）
+export async function setEvidenceNotRequired(id: string, companyId: string, value: boolean) {
+  const session = await requireSession()
+  const role = await getUserRole(session.user.id)
+  if (role !== "ADMIN") {
+    throw new Error("証憑なしOKの設定は管理者のみ実行できます")
+  }
+
+  const existing = await prisma.transaction.findUnique({ where: { id } })
+  if (!existing || existing.companyId !== companyId) {
+    throw new Error("Transaction not found")
+  }
+
+  const result = await prisma.transaction.update({
+    where: { id },
+    data: { evidenceNotRequired: value },
+  })
+
+  await createAuditLog({
+    tableName: "transactions_fina",
+    recordId: id,
+    operation: "UPDATE",
+    userId: session.user.id,
+    beforeData: { evidenceNotRequired: existing.evidenceNotRequired },
+    afterData: { evidenceNotRequired: value },
+  })
+
+  revalidatePath("/expenses")
+  revalidatePath("/expense-box")
+  return bigintToJson(result)
+}
+
 export async function deleteTransaction(id: string, companyId: string) {
   const session = await requireSession()
+  const role = await getUserRole(session.user.id)
+  if (role === "VIEWER") {
+    throw new Error("閲覧者は経費を削除できません")
+  }
 
   const existing = await prisma.transaction.findUnique({ where: { id } })
   if (!existing || existing.companyId !== companyId) {
@@ -501,18 +566,28 @@ export async function upsertTransactionDetails(
           throw new Error("月締め後は金額変更できません")
         }
       }
-      // 科目/摘要のみ更新
+      // 科目/摘要のみ更新 + 監査ログ記録
+      const session = await requireSession()
       for (let i = 0; i < details.length; i++) {
         const existing = existingDetails[i]
         if (existing) {
+          const beforeDetail = { midId: existing.midId, subId: existing.subId, summary: existing.summary }
+          const afterDetail = { midId: details[i].midId || null, subId: details[i].subId || null, summary: details[i].summary || null }
           await prisma.transactionDetail.update({
             where: { id: existing.id },
-            data: {
-              midId: details[i].midId || null,
-              subId: details[i].subId || null,
-              summary: details[i].summary || null,
-            },
+            data: afterDetail,
           })
+          // 変更があった場合のみログ記録
+          if (beforeDetail.midId !== afterDetail.midId || beforeDetail.subId !== afterDetail.subId || beforeDetail.summary !== afterDetail.summary) {
+            await createAuditLog({
+              tableName: "transaction_details_fina",
+              recordId: existing.id,
+              operation: "UPDATE_AFTER_CLOSE",
+              userId: session.user.id,
+              beforeData: beforeDetail as Record<string, unknown>,
+              afterData: afterDetail as Record<string, unknown>,
+            })
+          }
         }
       }
       revalidatePath("/expenses")

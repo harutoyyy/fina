@@ -4,12 +4,14 @@
 // ============================================================
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  schemas  = ["fina"]
 }
 
 // ============================================================
@@ -29,6 +31,7 @@ model User {
   accounts      AuthAccount[]
   profile       UserProfile?
 
+  @@schema("fina")
   @@map("user_fina")
 }
 
@@ -44,6 +47,7 @@ model Session {
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@schema("fina")
   @@map("session_fina")
 }
 
@@ -64,6 +68,7 @@ model AuthAccount {
 
   user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@schema("fina")
   @@map("account_fina")
 }
 
@@ -75,6 +80,7 @@ model Verification {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  @@schema("fina")
   @@map("verification_fina")
 }
 
@@ -85,6 +91,9 @@ model Verification {
 enum UserRole {
   ADMIN
   OPERATOR
+  VIEWER
+
+  @@schema("fina")
 }
 
 model UserProfile {
@@ -99,6 +108,7 @@ model UserProfile {
 
   user            User      @relation(fields: [authUserId], references: [id], onDelete: Cascade)
 
+  @@schema("fina")
   @@map("user_profiles_fina")
 }
 
@@ -146,6 +156,7 @@ model Company {
   recurringTemplates RecurringTemplate[]
   monthCloses     MonthClose[]
 
+  @@schema("fina")
   @@map("companies_fina")
 }
 
@@ -158,6 +169,8 @@ enum AccountType {
   TERM        // 定期預金
   SOCIAL_INSURANCE_RESERVE  // 社会保険積立（仮想口座）
   CONSUMPTION_TAX_RESERVE   // 消費税積立（仮想口座）
+
+  @@schema("fina")
 }
 
 model Account {
@@ -191,6 +204,7 @@ model Account {
   fundTransfersFrom FundTransfer[] @relation("TransferFrom")
   fundTransfersTo   FundTransfer[] @relation("TransferTo")
 
+  @@schema("fina")
   @@map("accounts_fina")
 }
 
@@ -205,6 +219,7 @@ model AccountRole {
   account     Account @relation(fields: [accountId], references: [id])
 
   @@unique([accountId, roleKey])
+  @@schema("fina")
   @@map("account_roles_fina")
 }
 
@@ -226,6 +241,7 @@ model MonthlyBalance {
   account         Account  @relation(fields: [accountId], references: [id])
 
   @@unique([accountId, yearMonth])
+  @@schema("fina")
   @@map("monthly_balances_fina")
 }
 
@@ -245,6 +261,7 @@ model AccountCategoryMajor {
 
   midCategories AccountCategoryMid[]
 
+  @@schema("fina")
   @@map("account_category_majors_fina")
 }
 
@@ -263,6 +280,7 @@ model AccountCategoryMid {
   transactionDetails TransactionDetail[]
   defaultPartnerMappings TradingPartnerDefault[]
 
+  @@schema("fina")
   @@map("account_category_mids_fina")
 }
 
@@ -280,6 +298,7 @@ model AccountCategorySub {
   transactionDetails TransactionDetail[]
   defaultPartnerMappings TradingPartnerDefault[]
 
+  @@schema("fina")
   @@map("account_category_subs_fina")
 }
 
@@ -291,6 +310,8 @@ enum TradingPartnerType {
   CUSTOMER   // 請求先
   VENDOR     // 支払先
   BOTH       // 双方
+
+  @@schema("fina")
 }
 
 model TradingPartner {
@@ -313,6 +334,7 @@ model TradingPartner {
   sites           TradingPartnerSite[]
   transactions    Transaction[]
 
+  @@schema("fina")
   @@map("trading_partners_fina")
 }
 
@@ -331,6 +353,7 @@ model TradingPartnerBankAccount {
 
   partner         TradingPartner @relation(fields: [partnerId], references: [id])
 
+  @@schema("fina")
   @@map("trading_partner_bank_accounts_fina")
 }
 
@@ -346,6 +369,7 @@ model TradingPartnerDefault {
   sub         AccountCategorySub? @relation(fields: [subId], references: [id])
 
   @@unique([partnerId])
+  @@schema("fina")
   @@map("trading_partner_defaults_fina")
 }
 
@@ -371,6 +395,7 @@ model TradingPartnerSite {
 
   partner         TradingPartner @relation(fields: [partnerId], references: [id])
 
+  @@schema("fina")
   @@map("trading_partner_sites_fina")
 }
 
@@ -385,6 +410,8 @@ enum TransactionType {
   SALARY         // 給与
   LOAN           // 借入
   TRANSFER       // 振替（内部資金移動・積立等）
+
+  @@schema("fina")
 }
 
 enum TransactionStatus {
@@ -392,12 +419,16 @@ enum TransactionStatus {
   READY          // 準備完了
   CONFIRMED      // 確定済
   CANCELLED      // 取消済
+
+  @@schema("fina")
 }
 
 enum PaymentMethod {
   BANK_TRANSFER  // 振込
   DIRECT_DEBIT   // 引落
   CASH_WITHDRAWAL // 現金引出
+
+  @@schema("fina")
 }
 
 model Transaction {
@@ -445,6 +476,16 @@ model Transaction {
 
   // 証憑
   hasEvidence     Boolean           @default(false)
+  evidenceNotRequired Boolean       @default(false) // 証憑なしOK（管理者のみ付与可）
+
+  // 受領
+  receivedDate    DateTime?         // 受領日（証憑添付時に自動セット、手修正可）
+
+  // 仮取引先
+  temporaryVendorName String?       // 仮取引先名（partnerId 未設定時に使用）
+
+  // 例外フラグ
+  isDateException Boolean           @default(false) // 入力者が実行予定日を手変更した場合 true
 
   // メタ
   amountUpdatedAt DateTime?         // 金額変更日時
@@ -459,12 +500,14 @@ model Transaction {
   children        Transaction[]     @relation("TransactionChildren")
   details         TransactionDetail[]
   evidences       Evidence[]
+  temporaryBankAccount TemporaryBankAccount?
   cashWithdrawal  CashWithdrawalBatch? @relation("BatchTransactions", fields: [cashWithdrawalBatchId], references: [id])
   fundTransfer    FundTransfer?
 
   @@index([companyId, accountId, accountingMonth])
   @@index([companyId, type, accountingMonth])
   @@index([parentId])
+  @@schema("fina")
   @@map("transactions_fina")
 }
 
@@ -490,6 +533,7 @@ model TransactionDetail {
   sub             AccountCategorySub? @relation(fields: [subId], references: [id])
 
   @@index([transactionId])
+  @@schema("fina")
   @@map("transaction_details_fina")
 }
 
@@ -509,6 +553,7 @@ model Evidence {
 
   transaction     Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 
+  @@schema("fina")
   @@map("evidences_fina")
 }
 
@@ -540,6 +585,7 @@ model PayrollGroup {
   company         Company  @relation(fields: [companyId], references: [id])
   salaryEntries   SalaryEntry[]
 
+  @@schema("fina")
   @@map("payroll_groups_fina")
 }
 
@@ -582,6 +628,7 @@ model SalaryEntry {
   paymentDetails  SalaryPaymentDetail[]
 
   @@unique([payrollGroupId, payMonth])
+  @@schema("fina")
   @@map("salary_entries_fina")
 }
 
@@ -598,6 +645,7 @@ model SalaryDeduction {
 
   salaryEntry     SalaryEntry @relation(fields: [salaryEntryId], references: [id], onDelete: Cascade)
 
+  @@schema("fina")
   @@map("salary_deductions_fina")
 }
 
@@ -613,6 +661,7 @@ model SalaryPaymentDetail {
 
   salaryEntry     SalaryEntry @relation(fields: [salaryEntryId], references: [id], onDelete: Cascade)
 
+  @@schema("fina")
   @@map("salary_payment_details_fina")
 }
 
@@ -633,6 +682,7 @@ model DeductionCategory {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  @@schema("fina")
   @@map("deduction_categories_fina")
 }
 
@@ -657,6 +707,7 @@ model FundTransfer {
   fromAccount     Account     @relation("TransferFrom", fields: [fromAccountId], references: [id])
   toAccount       Account     @relation("TransferTo", fields: [toAccountId], references: [id])
 
+  @@schema("fina")
   @@map("fund_transfers_fina")
 }
 
@@ -682,6 +733,7 @@ model CashWithdrawalBatch {
   // 金種表
   denominations   CashDenomination[]
 
+  @@schema("fina")
   @@map("cash_withdrawal_batches_fina")
 }
 
@@ -706,6 +758,7 @@ model CashDenomination {
 
   batch           CashWithdrawalBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
+  @@schema("fina")
   @@map("cash_denominations_fina")
 }
 
@@ -745,6 +798,7 @@ model RecurringTemplate {
 
   company         Company @relation(fields: [companyId], references: [id])
 
+  @@schema("fina")
   @@map("recurring_templates_fina")
 }
 
@@ -784,6 +838,7 @@ model LoanContract {
   company         Company @relation(fields: [companyId], references: [id])
   schedules       LoanSchedule[]
 
+  @@schema("fina")
   @@map("loan_contracts_fina")
 }
 
@@ -803,6 +858,7 @@ model LoanSchedule {
   contract        LoanContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   @@index([contractId])
+  @@schema("fina")
   @@map("loan_schedules_fina")
 }
 
@@ -832,6 +888,7 @@ model LeaseContract {
   company         Company @relation(fields: [companyId], references: [id])
   schedules       LeaseSchedule[]
 
+  @@schema("fina")
   @@map("lease_contracts_fina")
 }
 
@@ -847,6 +904,7 @@ model LeaseSchedule {
   contract        LeaseContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   @@index([contractId])
+  @@schema("fina")
   @@map("lease_schedules_fina")
 }
 
@@ -868,6 +926,7 @@ model MonthClose {
   company         Company @relation(fields: [companyId], references: [id])
 
   @@unique([companyId, yearMonth])
+  @@schema("fina")
   @@map("month_closes_fina")
 }
 
@@ -892,6 +951,7 @@ model TransferBatch {
 
   items           TransferBatchItem[]
 
+  @@schema("fina")
   @@map("transfer_batches_fina")
 }
 
@@ -912,6 +972,7 @@ model TransferBatchItem {
 
   batch           TransferBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
+  @@schema("fina")
   @@map("transfer_batch_items_fina")
 }
 
@@ -929,11 +990,35 @@ model SalaryJournalMapping {
   isActive        Boolean @default(true)
 
   @@unique([deductionItemName])
+  @@schema("fina")
   @@map("salary_journal_mappings_fina")
 }
 
 // ============================================================
-// 20. 監査ログ
+// 20. 仮振込先口座（仮取引先用）
+// ============================================================
+
+model TemporaryBankAccount {
+  id              String   @id @default(cuid())
+  transactionId   String   @unique           // 1取引に1仮口座
+  bankCode        String                     // 銀行コード
+  bankName        String?                    // 銀行名（表示用）
+  branchCode      String                     // 支店コード
+  branchName      String?                    // 支店名（表示用）
+  accountType     String                     // "ORDINARY","CURRENT"
+  accountNumber   String                     // 口座番号
+  accountHolder   String                     // 名義カナ（半角）
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  transaction     Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@schema("fina")
+  @@map("temporary_bank_accounts_fina")
+}
+
+// ============================================================
+// 21. 監査ログ
 // ============================================================
 
 model AuditLog {
@@ -950,6 +1035,7 @@ model AuditLog {
   @@index([tableName, recordId])
   @@index([userId, timestamp])
   @@index([timestamp])
+  @@schema("fina")
   @@map("audit_logs_fina")
 }
 
@@ -966,6 +1052,7 @@ model BankMaster {
 
   branches    BranchMaster[]
 
+  @@schema("fina")
   @@map("bank_masters_fina")
 }
 
@@ -980,5 +1067,6 @@ model BranchMaster {
   bank        BankMaster @relation(fields: [bankCode], references: [bankCode])
 
   @@unique([bankCode, branchCode])
+  @@schema("fina")
   @@map("branch_masters_fina")
 }

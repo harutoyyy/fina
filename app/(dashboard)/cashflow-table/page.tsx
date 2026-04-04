@@ -189,7 +189,11 @@ function SortableRow({
       <TableCell>
         {row.classification ? CLASSIFICATION_LABELS[row.classification] || row.classification : "—"}
       </TableCell>
-      <TableCell>{row.partnerName || "—"}</TableCell>
+      <TableCell>
+        {row.partnerName
+          ? (row.partnerId ? row.partnerName : <span className="text-orange-600">{row.partnerName}（仮）</span>)
+          : "—"}
+      </TableCell>
       <TableCell className="text-right font-mono text-green-600">
         {deposit > 0 ? formatYen(deposit) : ""}
       </TableCell>

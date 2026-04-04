@@ -50,9 +50,17 @@ export async function uploadEvidence(transactionId: string, data: {
     },
   })
 
+  // hasEvidence を true にし、receivedDate が未設定なら自動セット
+  const fullTx = await prisma.transaction.findUnique({
+    where: { id: transactionId },
+    select: { receivedDate: true },
+  })
   await prisma.transaction.update({
     where: { id: transactionId },
-    data: { hasEvidence: true },
+    data: {
+      hasEvidence: true,
+      ...(!fullTx?.receivedDate ? { receivedDate: new Date() } : {}),
+    },
   })
 
   revalidatePath("/expenses")
