@@ -31,6 +31,7 @@ type ExpenseBoxRow = {
   evidenceNotRequired: boolean
   receivedDate: string | null
   temporaryVendorName: string | null
+  latestEvidenceAt: string | null
   partner: { id: string; name: string } | null
   account: { id: string; bankName: string | null; branchName: string | null; accountNumber: string | null }
   details: {
@@ -59,6 +60,12 @@ function formatReceivedDate(dateStr: string | null): string {
   if (!dateStr) return "—"
   const d = new Date(dateStr)
   return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+function isRecentlyUpdated(dateStr: string | null, hoursAgo = 24): boolean {
+  if (!dateStr) return false
+  const diff = Date.now() - new Date(dateStr).getTime()
+  return diff < hoursAgo * 60 * 60 * 1000
 }
 
 export default function ExpenseBoxPage() {
@@ -301,7 +308,7 @@ export default function ExpenseBoxPage() {
                   </TableRow>
                 ) : (
                   expenses.map((exp) => (
-                    <TableRow key={exp.id}>
+                    <TableRow key={exp.id} className={isRecentlyUpdated(exp.latestEvidenceAt) ? "bg-blue-50 dark:bg-blue-950/30" : ""}>
                       <TableCell className="whitespace-nowrap font-mono text-sm">
                         {formatDD(exp.scheduledDate)}
                       </TableCell>
@@ -322,7 +329,12 @@ export default function ExpenseBoxPage() {
                             なしOK
                           </Badge>
                         ) : exp.hasEvidence ? (
-                          <Badge variant="default" className="text-xs">添付済</Badge>
+                          <div className="flex items-center gap-1">
+                            <Badge variant="default" className="text-xs">添付済</Badge>
+                            {isRecentlyUpdated(exp.latestEvidenceAt) && (
+                              <Badge variant="outline" className="text-[10px] px-1 py-0 text-blue-600 border-blue-300">NEW</Badge>
+                            )}
+                          </div>
                         ) : (
                           <div className="flex items-center gap-1">
                             <Badge variant="outline" className="text-xs">未添付</Badge>

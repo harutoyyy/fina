@@ -145,6 +145,11 @@ export async function getExpenseBoxItems(
           sub: { select: { id: true, name: true } },
         },
       },
+      evidences: {
+        orderBy: { uploadedAt: "desc" },
+        take: 1,
+        select: { uploadedAt: true },
+      },
     },
   })
 
@@ -165,6 +170,7 @@ export async function getExpenseBoxItems(
     evidenceNotRequired: tx.evidenceNotRequired,
     receivedDate: tx.receivedDate?.toISOString() ?? null,
     temporaryVendorName: tx.temporaryVendorName,
+    latestEvidenceAt: tx.evidences[0]?.uploadedAt?.toISOString() ?? null,
     partner: tx.partner ? { id: tx.partner.id, name: tx.partner.name } : null,
     account: {
       id: tx.account.id,

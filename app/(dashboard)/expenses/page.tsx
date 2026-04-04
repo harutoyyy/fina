@@ -267,6 +267,16 @@ export default function ExpensesPage() {
         filterMonth ? checkMonthClosed(companyId, filterMonth) : Promise.resolve(false),
       ])
       let filtered = data.filter((t) => t.classification === "TEMPORARY")
+      // 支払月BOX: scheduledDate の属する月でフィルタ（休日調整後の実行予定日ベース）
+      if (filterMonth) {
+        filtered = filtered.filter((t) => {
+          const sd = t.scheduledDate || t.transactionDate
+          if (!sd) return true // 日付なしは表示
+          const d = new Date(sd)
+          const sdMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+          return sdMonth === filterMonth || t.accountingMonth === filterMonth
+        })
+      }
       // UNCONFIRMED: DRAFT + READY のみ（確定表示チェックで CONFIRMED も混在可能）
       if (filterStatus === "UNCONFIRMED") {
         if (showConfirmed) {
