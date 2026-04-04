@@ -6,6 +6,7 @@
 // ============================================================
 
 import { PrismaClient } from '@prisma/client';
+import { seedAllCompanyMasters, seedAllCompanyTransactions } from './seed-all-companies';
 
 const prisma = new PrismaClient();
 
@@ -14,6 +15,7 @@ async function resetAll() {
 
   // 依存関係の順序で削除（子→親）
   await prisma.cashDenomination.deleteMany();
+  await prisma.temporaryBankAccount.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.evidence.deleteMany();
   await prisma.transactionDetail.deleteMany();
@@ -267,7 +269,7 @@ async function seedMaster() {
     companies, mainAccount, payrollGroups,
     ntt, tepco, tokyoGas, customer, subcontractor, groupCompanyPartner, bankPartner, shokokin, leasePartner,
     通信費, 水道光熱費, 地代家賃, 事務所賃料, リース料, 旅費交通費_販管, 支払手数料, 外注費, 租税公課,
-    売上, 販管費, その他費用,
+    売上, 販管費, その他費用, 車両費, 消耗品費,
   };
 }
 
@@ -278,7 +280,7 @@ async function seedTestData(refs: Awaited<ReturnType<typeof seedMaster>>) {
     companies, mainAccount, payrollGroups,
     ntt, tepco, tokyoGas, customer, subcontractor, groupCompanyPartner, bankPartner, shokokin, leasePartner,
     通信費, 水道光熱費, 地代家賃, 事務所賃料, リース料, 旅費交通費_販管, 支払手数料, 外注費, 租税公課,
-    売上, 販管費, その他費用,
+    売上, 販管費, その他費用, 車両費, 消耗品費,
   } = refs;
 
   const okoshi = companies[0];
@@ -629,6 +631,106 @@ async function seedTestData(refs: Awaited<ReturnType<typeof seedMaster>>) {
   });
   console.log('  Month close (2026-02)');
 
+  // --- 臨時経費（TEMPORARY）大量データ ---
+  const tempExpenseData = [
+    { partner: null, tempVendor: '山田商店', mid: 消耗品費, amount: -45000, summary: '事務用品一式購入', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-03-08', received: '2026-03-08', hasEvidence: true },
+    { partner: null, tempVendor: '佐々木設備', mid: null, amount: -180000, summary: '現場仮設電気工事', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-03-12', received: '2026-03-12', hasEvidence: true },
+    { partner: null, tempVendor: null, mid: 旅費交通費_販管, amount: -35000, summary: '現場視察 高速代・宿泊', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-03-15', received: null, hasEvidence: false, evidenceNotRequired: true },
+    { partner: null, tempVendor: '鈴木鉄工所', mid: null, amount: -520000, summary: '鉄骨加工費', status: 'READY', method: 'BANK_TRANSFER', date: '2026-03-20', received: '2026-03-19', hasEvidence: true },
+    { partner: ntt, tempVendor: null, mid: 通信費, amount: -8800, summary: '追加回線工事費（臨時）', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-03-22', received: '2026-03-22', hasEvidence: true },
+    { partner: null, tempVendor: '田中塗装', mid: null, amount: -350000, summary: '外壁塗装費', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-03-25', received: '2026-03-24', hasEvidence: true },
+    { partner: null, tempVendor: '中村重機', mid: null, amount: -280000, summary: 'クレーン作業費', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-04-05', received: null, hasEvidence: false },
+    { partner: null, tempVendor: '高橋建材', mid: null, amount: -165000, summary: '型枠材料費', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-04-10', received: '2026-04-09', hasEvidence: true },
+    { partner: null, tempVendor: null, mid: 消耗品費, amount: -12500, summary: 'ヘルメット・安全帯購入', status: 'READY', method: 'CASH_WITHDRAWAL', date: '2026-03-18', received: '2026-03-18', hasEvidence: true },
+    { partner: null, tempVendor: '松本電機', mid: null, amount: -95000, summary: '分電盤取付工事', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-04-15', received: null, hasEvidence: false },
+    { partner: tepco, tempVendor: null, mid: 水道光熱費, amount: -7200, summary: '現場仮設電力 追加請求', status: 'DRAFT', method: 'DIRECT_DEBIT', date: '2026-03-28', received: '2026-03-28', hasEvidence: true },
+    { partner: null, tempVendor: '伊藤測量', mid: null, amount: -75000, summary: '境界測量費', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-04-08', received: null, hasEvidence: false },
+    { partner: null, tempVendor: '渡辺設計事務所', mid: null, amount: -430000, summary: '構造計算書作成', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-04-12', received: '2026-04-11', hasEvidence: true },
+    { partner: null, tempVendor: null, mid: 車両費, amount: -55000, summary: '社用車タイヤ交換', status: 'READY', method: 'CASH_WITHDRAWAL', date: '2026-03-20', received: '2026-03-20', hasEvidence: true, evidenceNotRequired: false },
+    { partner: null, tempVendor: '小林清掃', mid: null, amount: -35000, summary: '現場清掃費', status: 'DRAFT', method: 'BANK_TRANSFER', date: '2026-04-03', received: null, hasEvidence: false },
+  ];
+
+  for (let i = 0; i < tempExpenseData.length; i++) {
+    const e = tempExpenseData[i];
+    const month = e.date.startsWith('2026-04') ? '2026-04' : '2026-03';
+    const tx = await prisma.transaction.create({
+      data: {
+        companyId: okoshi.id, accountId: mainAccount.id,
+        partnerId: e.partner?.id || null,
+        temporaryVendorName: e.tempVendor || null,
+        type: 'EXPENSE', status: e.status as 'DRAFT' | 'READY',
+        scheduledDate: new Date(e.date), accountingMonth: month,
+        amount: BigInt(e.amount),
+        paymentMethod: e.method as 'BANK_TRANSFER' | 'DIRECT_DEBIT' | 'CASH_WITHDRAWAL',
+        classification: 'TEMPORARY', summary: e.summary, displayOrder: 30 + i,
+        hasEvidence: e.hasEvidence || false,
+        evidenceNotRequired: (e as { evidenceNotRequired?: boolean }).evidenceNotRequired || false,
+        receivedDate: e.received ? new Date(e.received) : null,
+        readyAt: e.status === 'READY' ? new Date(e.date) : null,
+      },
+    });
+
+    // 仮取引先名がある場合、一部に仮口座も作成
+    if (e.tempVendor && i % 3 === 0) {
+      await prisma.temporaryBankAccount.create({
+        data: {
+          transactionId: tx.id,
+          bankCode: '0134', bankName: '千葉銀行',
+          branchCode: '201', branchName: '松戸支店',
+          accountType: 'ORDINARY',
+          accountNumber: String(4000000 + i),
+          accountHolder: `ｶﾘ${e.tempVendor.slice(0, 3)}`,
+        },
+      });
+    }
+  }
+  console.log(`  ${tempExpenseData.length} temporary expenses (with temp vendors & bank accounts)`);
+
+  // --- isDateException のある経費 ---
+  await prisma.transaction.create({
+    data: {
+      companyId: okoshi.id, accountId: mainAccount.id, partnerId: ntt.id,
+      type: 'EXPENSE', status: 'DRAFT',
+      scheduledDate: new Date('2026-04-28'), accountingMonth: '2026-04',
+      amount: BigInt(-15000), paymentMethod: 'DIRECT_DEBIT',
+      classification: 'FIXED', summary: '4月分 本社回線利用料（支払日変更）',
+      isDateException: true, displayOrder: 50,
+      details: { create: { midId: 通信費.id, amount: BigInt(-15000), classification: 'FIXED', summary: '本社回線利用料', displayOrder: 1 } },
+    },
+  });
+  console.log('  isDateException example');
+
+  // --- 月次残高（全期間） ---
+  const balanceMonths: { ym: string; main: [number, number]; sub: [number, number] }[] = [
+    { ym: '2025-04', main: [3200000, 3800000], sub: [1500000, 1600000] },
+    { ym: '2025-05', main: [3800000, 4100000], sub: [1600000, 1700000] },
+    { ym: '2025-06', main: [4100000, 3900000], sub: [1700000, 1650000] },
+    { ym: '2025-07', main: [3900000, 4300000], sub: [1650000, 1800000] },
+    { ym: '2025-08', main: [4300000, 4000000], sub: [1800000, 1750000] },
+    { ym: '2025-09', main: [4000000, 4500000], sub: [1750000, 1900000] },
+    { ym: '2025-10', main: [4500000, 4200000], sub: [1900000, 1850000] },
+    { ym: '2025-11', main: [4200000, 4600000], sub: [1850000, 2000000] },
+    { ym: '2025-12', main: [4600000, 4400000], sub: [2000000, 1950000] },
+    { ym: '2026-01', main: [4400000, 4500000], sub: [1950000, 1800000] },
+  ];
+  const balRows = balanceMonths.flatMap(b => [
+    { companyId: okoshi.id, accountId: mainAccount.id, yearMonth: b.ym, openingBalance: BigInt(b.main[0]), closingBalance: BigInt(b.main[1]) },
+    { companyId: okoshi.id, accountId: subAccount.id, yearMonth: b.ym, openingBalance: BigInt(b.sub[0]), closingBalance: BigInt(b.sub[1]) },
+  ]);
+  await prisma.monthlyBalance.createMany({ data: balRows });
+  console.log(`  Monthly balances: ${balanceMonths.length} months × 2 accounts`);
+
+  // --- 月締め（過去月） ---
+  const closedMonths = ['2025-04','2025-05','2025-06','2025-07','2025-08','2025-09','2025-10','2025-11','2025-12','2026-01'];
+  await prisma.monthClose.createMany({
+    data: closedMonths.map(ym => ({
+      companyId: okoshi.id, yearMonth: ym, isClosed: true,
+      closedAt: new Date(`${ym}-01`), closedBy: 'system',
+    })),
+    skipDuplicates: true,
+  });
+  console.log(`  Month closes: ${closedMonths.length} months`);
+
   // --- 監査ログ ---
   await prisma.auditLog.createMany({
     data: [
@@ -650,7 +752,251 @@ async function seedTestData(refs: Awaited<ReturnType<typeof seedMaster>>) {
   });
   console.log('  Account roles');
 
-  console.log('✅ Test data complete');
+  // ============================================================
+  // 起工業 大量データ生成（10倍化）
+  // 2025-04〜2026-04 の13ヶ月 × 多種経費・売上・原価・給与・振替
+  // ============================================================
+  console.log('\n📊 Generating 10x data for 起工業...');
+
+  // 擬似乱数（再現可能）
+  function srand(seed: number): number {
+    const x = Math.sin(seed * 9301 + 49297) * 233280;
+    return x - Math.floor(x);
+  }
+  function vary(base: number, seed: number, range = 0.3): number {
+    return Math.round(base * (1 - range + srand(seed) * range * 2) / 100) * 100;
+  }
+  function lastDay(y: number, m: number): number { return new Date(y, m, 0).getDate(); }
+
+  const bulkMonths: string[] = [];
+  for (let y = 2025; y <= 2026; y++) {
+    const maxM = y === 2025 ? 12 : 4;
+    for (let m = 1; m <= maxM; m++) bulkMonths.push(`${y}-${String(m).padStart(2, '0')}`);
+  }
+
+  // 経費テンプレート（10種の異なる経費）
+  const expTemplates = [
+    { partner: ntt, mid: 通信費, base: 15000, summary: '本社回線利用料', method: 'DIRECT_DEBIT' as const, cls: 'FIXED' },
+    { partner: tepco, mid: 水道光熱費, base: 35000, summary: '電気代', method: 'DIRECT_DEBIT' as const, cls: 'VARIABLE' },
+    { partner: tokyoGas, mid: 水道光熱費, base: 12000, summary: 'ガス代', method: 'DIRECT_DEBIT' as const, cls: 'VARIABLE' },
+    { partner: null, mid: 地代家賃, base: 120000, summary: '事務所家賃', method: 'BANK_TRANSFER' as const, cls: 'FIXED' },
+    { partner: null, mid: 旅費交通費_販管, base: 28000, summary: 'ETC利用', method: 'DIRECT_DEBIT' as const, cls: 'VARIABLE' },
+    { partner: leasePartner, mid: リース料, base: 55000, summary: '車両リース料', method: 'DIRECT_DEBIT' as const, cls: 'FIXED' },
+    { partner: null, mid: 支払手数料, base: 5500, summary: '振込手数料', method: 'BANK_TRANSFER' as const, cls: 'VARIABLE' },
+    { partner: null, mid: 水道光熱費, base: 8000, summary: '水道代', method: 'DIRECT_DEBIT' as const, cls: 'VARIABLE' },
+    { partner: leasePartner, mid: リース料, base: 18000, summary: '複合機リース', method: 'DIRECT_DEBIT' as const, cls: 'FIXED' },
+    { partner: null, mid: 旅費交通費_販管, base: 45000, summary: '出張旅費', method: 'BANK_TRANSFER' as const, cls: 'VARIABLE' },
+  ];
+
+  // 原価取引先ローテーション用
+  const costPartners = [subcontractor, groupCompanyPartner];
+  const costSummaries = [
+    '外注費（現場A）', '外注費（現場B）', '材料費', '重機リース', '仮設材',
+  ];
+
+  // 売上取引先ローテーション用
+  const salesSummaries = [
+    '工事代金', '追加工事', '設計変更分', '竣工精算',
+  ];
+
+  let bulkExpCount = 0;
+  let bulkSalesCount = 0;
+  let bulkCostCount = 0;
+  let bulkSalaryCount = 0;
+  let bulkTransferCount = 0;
+
+  for (let mIdx = 0; mIdx < bulkMonths.length; mIdx++) {
+    const month = bulkMonths[mIdx];
+    const [yr, mn] = month.split('-').map(Number);
+    const isRecent = mIdx >= bulkMonths.length - 2; // 直近2ヶ月
+    const isDraft = mIdx >= bulkMonths.length - 1;   // 最新月
+
+    // --- 経費：10件/月 ---
+    for (let eIdx = 0; eIdx < expTemplates.length; eIdx++) {
+      const t = expTemplates[eIdx];
+      const seed = mIdx * 100 + eIdx;
+      const amt = vary(t.base, seed);
+      const day = 5 + Math.floor(srand(seed + 7) * 23);
+      const txDate = new Date(yr, mn - 1, Math.min(day, lastDay(yr, mn)));
+      const status = isDraft ? 'DRAFT' : (isRecent && eIdx < 3 ? 'READY' : 'CONFIRMED');
+
+      await prisma.transaction.create({
+        data: {
+          companyId: okoshi.id, accountId: mainAccount.id,
+          partnerId: t.partner?.id || null,
+          type: 'EXPENSE', status: status as 'DRAFT' | 'READY' | 'CONFIRMED',
+          transactionDate: txDate, scheduledDate: txDate, accountingMonth: month,
+          amount: BigInt(-amt), actualAmount: status === 'CONFIRMED' ? BigInt(-amt) : null,
+          paymentMethod: t.method, classification: t.cls, summary: `${month} ${t.summary}`,
+          confirmedAt: status === 'CONFIRMED' ? txDate : null, displayOrder: eIdx + 1,
+          details: { create: { midId: t.mid.id, amount: BigInt(-amt), classification: t.cls, summary: t.summary, displayOrder: 1 } },
+        },
+      });
+      bulkExpCount++;
+    }
+
+    // --- 売上：3〜4件/月 ---
+    const salesCount = 3 + (mIdx % 2);
+    for (let sIdx = 0; sIdx < salesCount; sIdx++) {
+      const seed = mIdx * 200 + sIdx;
+      const amt = vary(3500000, seed, 0.4);
+      const invoiceAmt = Math.round(amt * 1.1);
+      const status = isDraft ? 'DRAFT' : (isRecent ? 'READY' : 'CONFIRMED');
+      const invoiceDate = new Date(yr, mn - 2, lastDay(yr, mn - 1)); // 前月末
+      const schedDate = new Date(yr, mn - 1, lastDay(yr, mn));
+
+      const salesTx = await prisma.transaction.create({
+        data: {
+          companyId: okoshi.id, accountId: mainAccount.id, partnerId: customer.id,
+          type: 'SALES', status: status as 'DRAFT' | 'READY' | 'CONFIRMED',
+          invoiceDate, scheduledDate: schedDate, accountingMonth: month,
+          amount: BigInt(amt), invoiceAmount: BigInt(invoiceAmt),
+          summary: `${month} ○○建設 ${salesSummaries[sIdx % salesSummaries.length]}`,
+          confirmedAt: status === 'CONFIRMED' ? schedDate : null, displayOrder: sIdx + 1,
+          details: { create: { midId: 売上.id, amount: BigInt(amt), summary: salesSummaries[sIdx % salesSummaries.length], displayOrder: 1 } },
+        },
+      });
+
+      // 確定済みなら入金子取引も作成
+      if (status === 'CONFIRMED') {
+        const fee = 550;
+        await prisma.transaction.create({
+          data: {
+            companyId: okoshi.id, accountId: mainAccount.id, partnerId: customer.id,
+            type: 'SALES', status: 'CONFIRMED', parentId: salesTx.id,
+            transactionDate: schedDate, accountingMonth: month,
+            amount: BigInt(amt - fee), summary: `○○建設 入金（手数料${fee}円差引）`,
+            confirmedAt: schedDate, displayOrder: 1,
+          },
+        });
+        bulkSalesCount++;
+      }
+      bulkSalesCount++;
+    }
+
+    // --- 原価支払：3件/月 ---
+    for (let cIdx = 0; cIdx < 3; cIdx++) {
+      const seed = mIdx * 300 + cIdx;
+      const amt = vary(1200000, seed, 0.4);
+      const partner = costPartners[cIdx % costPartners.length];
+      const status = isDraft ? 'DRAFT' : (isRecent ? 'READY' : 'CONFIRMED');
+      const txDate = new Date(yr, mn - 1, 25);
+
+      await prisma.transaction.create({
+        data: {
+          companyId: okoshi.id, accountId: mainAccount.id, partnerId: partner.id,
+          type: 'COST_PAYMENT', status: status as 'DRAFT' | 'READY' | 'CONFIRMED',
+          transactionDate: txDate, scheduledDate: txDate, accountingMonth: month,
+          amount: BigInt(-amt), actualAmount: status === 'CONFIRMED' ? BigInt(-amt) : null,
+          recordedAmount: BigInt(Math.round(amt * 1.1)), transferAmount: BigInt(amt),
+          paymentMethod: 'BANK_TRANSFER', classification: 'VARIABLE',
+          summary: `${month} ${partner.name} ${costSummaries[cIdx % costSummaries.length]}`,
+          confirmedAt: status === 'CONFIRMED' ? txDate : null, displayOrder: cIdx + 1,
+          details: { create: { midId: 外注費.id, amount: BigInt(-amt), classification: 'VARIABLE', summary: costSummaries[cIdx % costSummaries.length], displayOrder: 1 } },
+        },
+      });
+      bulkCostCount++;
+    }
+
+    // --- 給与：3グループ/月（手動作成済みの月はスキップ）---
+    const skipSalary = ['2026-02', '2026-03'].includes(month);
+    if (!skipSalary) for (const [pgIdx, pg] of [pgKoji, pgEigyo, pgKanri].entries()) {
+      const seed = mIdx * 400 + pgIdx;
+      const basePayByGroup = [2700000, 1300000, 840000][pgIdx];
+      const totalPay = vary(basePayByGroup, seed, 0.1);
+      const transport = Math.round(totalPay * 0.05);
+      const misc = pgIdx === 0 ? Math.round(totalPay * 0.01) : 0;
+      const advance = pgIdx === 0 ? vary(50000, seed + 1) : 0;
+      const siReserve = Math.round(totalPay * 0.14);
+      const ctReserve = Math.round(totalPay * 0.09);
+      const rentDed = vary([180000, 80000, 60000][pgIdx], seed + 2, 0.1);
+      const telecomDed = vary([45000, 30000, 20000][pgIdx], seed + 3, 0.1);
+      const advanceDed = pgIdx === 0 ? vary(80000, seed + 4) : 0;
+      const siDed = vary([120000, 85000, 55000][pgIdx], seed + 5, 0.1);
+      const taxDed = vary([55000, 45000, 35000][pgIdx], seed + 6, 0.1);
+      const totalDed = rentDed + telecomDed + advanceDed + siDed + taxDed;
+      const netPay = totalPay - totalDed;
+      const status = isDraft ? 'DRAFT' : (isRecent ? 'READY' : 'CONFIRMED');
+      const payDate = new Date(yr, mn - 1, 25);
+
+      // 給与トランザクション
+      await prisma.transaction.create({
+        data: {
+          companyId: okoshi.id, accountId: mainAccount.id,
+          type: 'SALARY', status: status as 'DRAFT' | 'READY' | 'CONFIRMED',
+          transactionDate: payDate, scheduledDate: payDate, accountingMonth: month,
+          amount: BigInt(-totalPay), actualAmount: status === 'CONFIRMED' ? BigInt(-totalPay) : null,
+          paymentMethod: 'BANK_TRANSFER', summary: `${month} ${pg.name}給与`,
+          confirmedAt: status === 'CONFIRMED' ? payDate : null, displayOrder: pgIdx + 1,
+        },
+      });
+
+      // SalaryEntry
+      const deductions: { itemName: string; amount: bigint; displayOrder: number }[] = [
+        { itemName: '家賃控除', amount: BigInt(rentDed), displayOrder: 1 },
+        { itemName: '通信費控除', amount: BigInt(telecomDed), displayOrder: 2 },
+        { itemName: '社会保険料(合算)', amount: BigInt(siDed), displayOrder: 3 },
+        { itemName: '源泉納税(合算)', amount: BigInt(taxDed), displayOrder: 4 },
+      ];
+      if (advanceDed > 0) {
+        deductions.push({ itemName: '立替経費', amount: BigInt(advanceDed), displayOrder: 5 });
+      }
+
+      await prisma.salaryEntry.create({
+        data: {
+          payrollGroupId: pg.id, payMonth: month, payDate,
+          taxablePayment: BigInt(Math.round(totalPay * 0.88)),
+          transportAllowance: BigInt(transport),
+          miscExpenses: BigInt(misc),
+          advanceExpenses: BigInt(advance),
+          totalPayment: BigInt(totalPay),
+          socialInsuranceReserve: BigInt(siReserve),
+          consumptionTaxReserve: BigInt(ctReserve),
+          totalDeduction: BigInt(totalDed),
+          netPayment: BigInt(netPay),
+          headcount: [15, 5, 3][pgIdx],
+          status: status as 'DRAFT' | 'READY' | 'CONFIRMED',
+          confirmedAt: status === 'CONFIRMED' ? payDate : null,
+          deductions: { create: deductions },
+          paymentDetails: { create: [
+            { paymentDate: payDate, paymentMethod: 'BANK_TRANSFER', accountId: mainAccount.id, amount: BigInt(pgIdx === 0 ? netPay - 150000 : netPay), displayOrder: 1 },
+            ...(pgIdx === 0 ? [{ paymentDate: payDate, paymentMethod: 'CASH_WITHDRAWAL' as const, accountId: mainAccount.id, amount: BigInt(150000), displayOrder: 2 }] : []),
+          ] },
+        },
+      });
+      bulkSalaryCount++;
+    }
+
+    // --- 資金移動：1件/月 ---
+    if (mIdx % 2 === 0) {
+      const amt = vary(500000, mIdx * 500, 0.3);
+      const txDate = new Date(yr, mn - 1, 5);
+      const status = isDraft ? 'DRAFT' : 'CONFIRMED';
+
+      const ft = await prisma.transaction.create({
+        data: {
+          companyId: okoshi.id, accountId: mainAccount.id,
+          type: 'TRANSFER', status: status as 'DRAFT' | 'CONFIRMED',
+          transactionDate: txDate, accountingMonth: month,
+          amount: BigInt(-amt), summary: `${month} 千葉銀行→京葉銀行 資金移動`,
+          confirmedAt: status === 'CONFIRMED' ? txDate : null, displayOrder: 1,
+        },
+      });
+      await prisma.fundTransfer.create({
+        data: { transactionId: ft.id, fromAccountId: mainAccount.id, toAccountId: subAccount.id, transferDate: txDate, amount: BigInt(amt) },
+      });
+      bulkTransferCount++;
+    }
+  }
+
+  console.log(`  経費: ${bulkExpCount}件`);
+  console.log(`  売上: ${bulkSalesCount}件`);
+  console.log(`  原価: ${bulkCostCount}件`);
+  console.log(`  給与: ${bulkSalaryCount}件（SalaryEntry）`);
+  console.log(`  振替: ${bulkTransferCount}件`);
+  console.log(`  合計: ${bulkExpCount + bulkSalesCount + bulkCostCount + bulkSalaryCount * 1 + bulkTransferCount}件+`);
+
+  console.log('✅ Test data complete (10x for 起工業)');
 }
 
 async function main() {
@@ -658,22 +1004,39 @@ async function main() {
   const refs = await seedMaster();
   await seedTestData(refs);
 
+  // 全12社分のマスタデータ（口座・取引先・給与グループ）を追加
+  const midMap: Record<string, { id: string }> = {
+    '売上': refs.売上,
+    '外注費': refs.外注費,
+    '通信費': refs.通信費,
+    '水道光熱費': refs.水道光熱費,
+    '地代家賃': refs.地代家賃,
+    '消耗品費': { id: (await prisma.accountCategoryMid.findFirst({ where: { name: '消耗品費' } }))!.id },
+    '広告宣伝費': { id: (await prisma.accountCategoryMid.findFirst({ where: { name: '広告宣伝費' } }))!.id },
+  };
+
+  const { companyAccounts, companyPartners, companyPayrolls } = await seedAllCompanyMasters(refs.companies, midMap);
+
+  // 全12社分のトランザクション（経費/売上/給与/原価支払）を追加
+  await seedAllCompanyTransactions(
+    refs.companies,
+    refs.mainAccount.id,
+    companyAccounts,
+    companyPartners,
+    companyPayrolls,
+    midMap,
+  );
+
   console.log('\n🎉 Full reset + seed completed!');
   console.log('');
   console.log('📊 Summary:');
   console.log('  Companies: 12');
-  console.log('  Accounts: 1 main + 1 sub + 1 group + virtual');
-  console.log('  Partners: 9 (vendors, customer, banks, lease)');
-  console.log('  Expenses: 10 (DRAFT/READY/CONFIRMED/CANCELLED)');
-  console.log('  Sales: 3 parents + 1 child');
-  console.log('  Cost Payments: 3');
-  console.log('  Transfers: 2 (internal + inter-company)');
-  console.log('  Salary Entries: 3 (with deductions & payments)');
-  console.log('  Loans: 2 contracts + 12 schedules');
-  console.log('  Leases: 2 contracts + 12 schedules');
-  console.log('  Cash Withdrawal: 1 batch');
-  console.log('  Recurring Templates: 4');
-  console.log('  Month Close: 1 (2026-02)');
+  console.log('  Accounts: 12 main + 11 term + virtual (48+ total)');
+  console.log('  Partners: 9 (起工業) + 46 (他社) = 55');
+  console.log('  Payroll Groups: 3 (起工業) + 18 (他社) = 21');
+  console.log('  起工業 detail: Expenses 10, Sales 4, Cost 3, Transfers 2, Salary 3, Loans 2, Leases 2');
+  console.log('  他11社: 各16ヶ月 × (経費3 + 売上1 + 原価1 + 給与1) = 約1056件');
+  console.log('  Total Transactions: ~1080+ (起工業 detailed + 他社 16ヶ月×6種×11)');
 }
 
 main()
