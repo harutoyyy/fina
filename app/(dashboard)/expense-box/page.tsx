@@ -112,7 +112,7 @@ export default function ExpenseBoxPage() {
         getExpenseBoxItems(selectedCompany.id, filters),
         getCurrentUserProfile(),
       ])
-      setExpenses(expResult.data)
+      setExpenses(expResult.data ?? [])
       setProfile(userProfile)
     } catch (e) {
       console.error("Failed to load expense box data:", e)
