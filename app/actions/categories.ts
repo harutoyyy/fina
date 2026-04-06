@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/prisma"
 import { requireSession } from "@/lib/auth-server"
 import { revalidatePath } from "next/cache"
+import { getCurrentUserProfile } from "@/app/actions/user-profile"
 
 export async function getCategories() {
   await requireSession()
@@ -26,6 +27,8 @@ export async function createMidCategory(data: {
   name: string
 }) {
   await requireSession()
+  const profile = await getCurrentUserProfile()
+  if (profile?.role !== "ADMIN") throw new Error("管理者のみ実行できます")
   const maxOrder = await prisma.accountCategoryMid.findFirst({
     where: { majorId: data.majorId },
     orderBy: { displayOrder: "desc" },
@@ -46,6 +49,8 @@ export async function updateMidCategory(id: string, data: {
   isActive?: boolean
 }) {
   await requireSession()
+  const profile = await getCurrentUserProfile()
+  if (profile?.role !== "ADMIN") throw new Error("管理者のみ実行できます")
   const result = await prisma.accountCategoryMid.update({
     where: { id },
     data,
@@ -59,6 +64,8 @@ export async function createSubCategory(data: {
   name: string
 }) {
   await requireSession()
+  const profile = await getCurrentUserProfile()
+  if (profile?.role !== "ADMIN") throw new Error("管理者のみ実行できます")
   const maxOrder = await prisma.accountCategorySub.findFirst({
     where: { midId: data.midId },
     orderBy: { displayOrder: "desc" },
@@ -79,6 +86,8 @@ export async function updateSubCategory(id: string, data: {
   isActive?: boolean
 }) {
   await requireSession()
+  const profile = await getCurrentUserProfile()
+  if (profile?.role !== "ADMIN") throw new Error("管理者のみ実行できます")
   const result = await prisma.accountCategorySub.update({
     where: { id },
     data,

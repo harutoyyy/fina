@@ -10,6 +10,7 @@ export type AuditOperation =
   | "UNCONFIRM"
   | "MONTH_CLOSE"
   | "MONTH_REOPEN"
+  | "PARTNER_NORMALIZED"
 
 export async function createAuditLog(params: {
   tableName: string

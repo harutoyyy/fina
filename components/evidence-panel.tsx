@@ -1,10 +1,12 @@
 "use client"
 
 import { useEffect, useState, useRef } from "react"
-import { getEvidencesForTransaction, getUploadUrl, uploadEvidence, deleteEvidence, getEvidenceViewUrl } from "@/app/actions/evidence"
+import { getEvidencesForTransaction, getUploadUrl, uploadEvidence, deleteEvidence, getEvidenceViewUrl, updateEvidenceMeta } from "@/app/actions/evidence"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Loader2, Upload, Trash2, FileText, Image, File, Eye } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Loader2, Upload, Trash2, FileText, Image, File, Eye, Pencil, Save } from "lucide-react"
 
 type Evidence = Awaited<ReturnType<typeof getEvidencesForTransaction>>[number]
 
@@ -12,6 +14,10 @@ function getFileIcon(mimeType: string | null) {
   if (!mimeType) return <File className="h-5 w-5" />
   if (mimeType.startsWith("image/")) return <Image className="h-5 w-5" />
   return <FileText className="h-5 w-5" />
+}
+
+function isRecentUpload(date: string | Date, hoursAgo = 48): boolean {
+  return Date.now() - new Date(date).getTime() < hoursAgo * 3600_000
 }
 
 function formatFileSize(bytes: number | null) {
@@ -35,6 +41,9 @@ export default function EvidencePanel({
   const [uploading, setUploading] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewMime, setPreviewMime] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [metaForm, setMetaForm] = useState({ date: "", vendor: "", amount: "" })
+  const [metaSaving, setMetaSaving] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const load = async () => {
@@ -144,11 +153,16 @@ export default function EvidencePanel({
                 {evidences.map((ev) => (
                   <div
                     key={ev.id}
-                    className="flex items-center gap-3 p-2 rounded border bg-muted/30"
+                    className={`flex items-center gap-3 p-2 rounded border ${isRecentUpload(ev.uploadedAt) ? "bg-blue-50 dark:bg-blue-950/30 border-blue-200" : "bg-muted/30"}`}
                   >
                     {getFileIcon(ev.mimeType)}
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{ev.fileName}</p>
+                      <div className="flex items-center gap-1">
+                        <p className="text-sm font-medium truncate">{ev.fileName}</p>
+                        {isRecentUpload(ev.uploadedAt) && (
+                          <Badge variant="outline" className="text-[10px] px-1 py-0 text-blue-600 border-blue-300 shrink-0">NEW</Badge>
+                        )}
+                      </div>
                       <p className="text-xs text-muted-foreground">
                         {formatFileSize(ev.fileSize)} · {new Date(ev.uploadedAt).toLocaleDateString("ja-JP")}
                       </p>
@@ -165,11 +179,87 @@ export default function EvidencePanel({
                     <Button
                       variant="ghost"
                       size="icon"
+                      onClick={() => {
+                        if (editingId === ev.id) {
+                          setEditingId(null)
+                        } else {
+                          setEditingId(ev.id)
+                          setMetaForm({
+                            date: (ev as Record<string, unknown>).metaTransactionDate
+                              ? new Date((ev as Record<string, unknown>).metaTransactionDate as string).toISOString().split("T")[0]
+                              : "",
+                            vendor: ((ev as Record<string, unknown>).metaVendorName as string) || "",
+                            amount: (ev as Record<string, unknown>).metaAmount
+                              ? String((ev as Record<string, unknown>).metaAmount)
+                              : "",
+                          })
+                        }
+                      }}
+                      className="shrink-0"
+                      title="メタ編集"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       onClick={() => handleDelete(ev.id)}
                       className="shrink-0"
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
+                    {editingId === ev.id && (
+                      <div className="w-full mt-2 space-y-2 border-t pt-2" onClick={(e) => e.stopPropagation()}>
+                        <div className="grid grid-cols-3 gap-2">
+                          <Input
+                            type="date"
+                            className="h-7 text-xs"
+                            placeholder="取引日"
+                            value={metaForm.date}
+                            onChange={(e) => setMetaForm((f) => ({ ...f, date: e.target.value }))}
+                          />
+                          <Input
+                            type="text"
+                            className="h-7 text-xs"
+                            placeholder="取引先名"
+                            value={metaForm.vendor}
+                            onChange={(e) => setMetaForm((f) => ({ ...f, vendor: e.target.value }))}
+                          />
+                          <Input
+                            type="number"
+                            className="h-7 text-xs"
+                            placeholder="金額"
+                            value={metaForm.amount}
+                            onChange={(e) => setMetaForm((f) => ({ ...f, amount: e.target.value }))}
+                          />
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs w-full"
+                          disabled={metaSaving}
+                          onClick={async () => {
+                            setMetaSaving(true)
+                            try {
+                              await updateEvidenceMeta(ev.id, {
+                                metaTransactionDate: metaForm.date || null,
+                                metaVendorName: metaForm.vendor || null,
+                                metaAmount: metaForm.amount || null,
+                              })
+                              setEditingId(null)
+                              load()
+                            } catch (err) {
+                              alert(err instanceof Error ? err.message : "保存に失敗しました")
+                            } finally {
+                              setMetaSaving(false)
+                            }
+                          }}
+                        >
+                          <Save className="h-3 w-3 mr-1" />
+                          保存
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

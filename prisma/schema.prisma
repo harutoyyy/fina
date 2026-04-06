@@ -155,6 +155,7 @@ model Company {
   leaseContracts  LeaseContract[]
   recurringTemplates RecurringTemplate[]
   monthCloses     MonthClose[]
+  reconciliationCheckpoints ReconciliationCheckpoint[]
 
   @@schema("fina")
   @@map("companies_fina")
@@ -203,6 +204,7 @@ model Account {
   // 資金移動先として
   fundTransfersFrom FundTransfer[] @relation("TransferFrom")
   fundTransfersTo   FundTransfer[] @relation("TransferTo")
+  reconciliationCheckpoints ReconciliationCheckpoint[]
 
   @@schema("fina")
   @@map("accounts_fina")
@@ -484,6 +486,9 @@ model Transaction {
   // 仮取引先
   temporaryVendorName String?       // 仮取引先名（partnerId 未設定時に使用）
 
+  // 繰り返しテンプレートとの紐付け
+  recurringTemplateId String?       // 繰り返しテンプレートID
+
   // 例外フラグ
   isDateException Boolean           @default(false) // 入力者が実行予定日を手変更した場合 true
 
@@ -503,8 +508,10 @@ model Transaction {
   temporaryBankAccount TemporaryBankAccount?
   cashWithdrawal  CashWithdrawalBatch? @relation("BatchTransactions", fields: [cashWithdrawalBatchId], references: [id])
   fundTransfer    FundTransfer?
+  recurringTemplate RecurringTemplate? @relation(fields: [recurringTemplateId], references: [id])
 
   @@index([companyId, accountId, accountingMonth])
+  @@index([recurringTemplateId])
   @@index([companyId, type, accountingMonth])
   @@index([parentId])
   @@schema("fina")
@@ -802,6 +809,7 @@ model RecurringTemplate {
   updatedAt       DateTime @updatedAt
 
   company         Company @relation(fields: [companyId], references: [id])
+  transactions    Transaction[]
 
   @@schema("fina")
   @@map("recurring_templates_fina")
@@ -1074,4 +1082,26 @@ model BranchMaster {
   @@unique([bankCode, branchCode])
   @@schema("fina")
   @@map("branch_masters_fina")
+}
+
+// ============================================================
+// 照合チェックポイント（通帳照合点）
+// ============================================================
+model ReconciliationCheckpoint {
+  id              String   @id @default(cuid())
+  companyId       String
+  accountId       String
+  checkpointDate  DateTime
+  yearMonth       String   // "YYYY-MM"
+  verifiedBalance BigInt
+  verifiedBy      String
+  verifiedAt      DateTime @default(now())
+  note            String?
+
+  company         Company  @relation(fields: [companyId], references: [id])
+  account         Account  @relation(fields: [accountId], references: [id])
+
+  @@unique([accountId, yearMonth, checkpointDate])
+  @@schema("fina")
+  @@map("reconciliation_checkpoints_fina")
 }

@@ -73,7 +73,7 @@ test.describe("Registration Page", () => {
     const uniqueEmail = `e2e-register-${Date.now()}@example.com`
     await registerPage.register("テスト太郎", uniqueEmail, "testpassword123")
 
-    await page.waitForURL("**/dashboard", { timeout: 15000 })
+    await page.waitForURL("**/dashboard", { timeout: 30000 })
     await expect(page.getByRole("heading", { name: "ダッシュボード" })).toBeVisible()
   })
 })

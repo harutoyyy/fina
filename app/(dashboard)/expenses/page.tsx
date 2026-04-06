@@ -339,12 +339,13 @@ export default function ExpensesPage() {
   // テンプレート（固定/変動） ハンドラー
   // ============================================================
   const handleTemplatePartnerChange = (partnerId: string) => {
+    const resolved = partnerId === "__none__" ? "" : partnerId
     setTemplateForm((prev) => {
-      const partner = partners.find((p) => p.id === partnerId)
+      const partner = partners.find((p) => p.id === resolved)
       const defaults = partner?.defaults?.[0]
       return {
         ...prev,
-        partnerId,
+        partnerId: resolved,
         midId: defaults?.midId || prev.midId,
         subId: defaults?.subId || prev.subId,
       }
@@ -452,12 +453,13 @@ export default function ExpensesPage() {
   // 臨時タブ ハンドラー
   // ============================================================
   const handleTempPartnerChange = (partnerId: string) => {
+    const resolved = partnerId === "__none__" ? "" : partnerId
     setTempForm((prev) => {
-      const partner = partners.find((p) => p.id === partnerId)
+      const partner = partners.find((p) => p.id === resolved)
       const defaults = partner?.defaults?.[0]
       return {
         ...prev,
-        partnerId,
+        partnerId: resolved,
         midId: defaults?.midId || prev.midId,
         subId: defaults?.subId || prev.subId,
       }
@@ -885,9 +887,10 @@ export default function ExpensesPage() {
               </div>
               <div className="space-y-2">
                 <Label>取引先</Label>
-                <Select value={templateForm.partnerId} onValueChange={handleTemplatePartnerChange}>
+                <Select value={templateForm.partnerId || "__none__"} onValueChange={handleTemplatePartnerChange}>
                   <SelectTrigger><SelectValue placeholder="取引先を選択" /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__none__">未選択</SelectItem>
                     {partners.map((p) => (
                       <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                     ))}
@@ -1033,9 +1036,10 @@ export default function ExpensesPage() {
               </div>
               <div className="space-y-2">
                 <Label>支払先</Label>
-                <Select value={tempForm.partnerId} onValueChange={handleTempPartnerChange}>
+                <Select value={tempForm.partnerId || "__none__"} onValueChange={handleTempPartnerChange}>
                   <SelectTrigger><SelectValue placeholder="取引先を選択" /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="__none__">未選択（仮取引先名を入力）</SelectItem>
                     {partners.map((p) => (
                       <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                     ))}

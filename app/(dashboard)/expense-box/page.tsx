@@ -10,9 +10,11 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Checkbox } from "@/components/ui/checkbox"
-import { updateTransactionStatus, setEvidenceNotRequired } from "@/app/actions/transactions"
+import { updateTransactionStatus, setEvidenceNotRequired, updateTransaction } from "@/app/actions/transactions"
 import { getExpenseBoxItems, getCurrentUserProfile, type CurrentUserProfile } from "@/app/actions/user-profile"
 import { formatYen } from "@/lib/format"
+import { Pagination } from "@/components/pagination"
+import { EvidenceSearch } from "@/components/evidence-search"
 
 type ExpenseBoxRow = {
   id: string
@@ -83,7 +85,10 @@ export default function ExpenseBoxPage() {
   const [partnerSearch, setPartnerSearch] = useState("")
   const [scheduledDateFrom, setScheduledDateFrom] = useState("")
   const [scheduledDateTo, setScheduledDateTo] = useState("")
+  const [summarySearch, setSummarySearch] = useState("")
   const [showReady, setShowReady] = useState(false)
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
 
   const loadData = useCallback(async () => {
     if (!selectedCompany) return
@@ -105,21 +110,27 @@ export default function ExpenseBoxPage() {
       if (partnerSearch.trim()) {
         filters.partnerSearch = partnerSearch.trim()
       }
+      if (summarySearch.trim()) {
+        filters.summarySearch = summarySearch.trim()
+      }
       if (scheduledDateFrom) filters.scheduledDateFrom = scheduledDateFrom
       if (scheduledDateTo) filters.scheduledDateTo = scheduledDateTo
+      filters.page = page
+      filters.pageSize = 100
 
       const [expResult, userProfile] = await Promise.all([
         getExpenseBoxItems(selectedCompany.id, filters),
         getCurrentUserProfile(),
       ])
       setExpenses(expResult.data ?? [])
+      setTotalPages(expResult.totalPages ?? 1)
       setProfile(userProfile)
     } catch (e) {
       console.error("Failed to load expense box data:", e)
     } finally {
       setLoading(false)
     }
-  }, [selectedCompany, receivedDatePreset, receivedDateFrom, receivedDateTo, evidenceFilter, partnerSearch, scheduledDateFrom, scheduledDateTo, showReady])
+  }, [selectedCompany, receivedDatePreset, receivedDateFrom, receivedDateTo, evidenceFilter, partnerSearch, summarySearch, scheduledDateFrom, scheduledDateTo, showReady, page])
 
   useEffect(() => {
     loadData()
@@ -181,7 +192,7 @@ export default function ExpenseBoxPage() {
       {/* フィルタ */}
       <Card>
         <CardContent className="pt-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div className="space-y-1">
               <Label className="text-xs">受領日</Label>
               <Select value={receivedDatePreset} onValueChange={setReceivedDatePreset}>
@@ -227,6 +238,15 @@ export default function ExpenseBoxPage() {
               />
             </div>
             <div className="space-y-1">
+              <Label className="text-xs">摘要</Label>
+              <Input
+                className="h-8 text-sm"
+                placeholder="部分一致検索"
+                value={summarySearch}
+                onChange={(e) => setSummarySearch(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
               <Label className="text-xs">予定日</Label>
               <div className="flex gap-1">
                 <Input type="date" className="h-8 text-xs" value={scheduledDateFrom} onChange={(e) => setScheduledDateFrom(e.target.value)} />
@@ -265,6 +285,9 @@ export default function ExpenseBoxPage() {
         </CardContent>
       </Card>
 
+      {/* 証憑メタ検索 */}
+      <EvidenceSearch companyId={selectedCompany.id} />
+
       {/* テーブル */}
       {loading ? (
         <Card>
@@ -291,9 +314,11 @@ export default function ExpenseBoxPage() {
                   <TableHead className="w-16">予定日</TableHead>
                   <TableHead>取引先</TableHead>
                   <TableHead>支払方法</TableHead>
+                  <TableHead>支払口座</TableHead>
+                  <TableHead>計上月</TableHead>
                   <TableHead className="text-right">金額</TableHead>
                   <TableHead>摘要</TableHead>
-                  <TableHead className="w-20">受領日</TableHead>
+                  <TableHead className="w-24">受領日</TableHead>
                   <TableHead>証憑</TableHead>
                   <TableHead>状態</TableHead>
                   <TableHead>操作</TableHead>
@@ -302,7 +327,7 @@ export default function ExpenseBoxPage() {
               <TableBody>
                 {expenses.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
                       該当するデータがありません
                     </TableCell>
                   </TableRow>
@@ -318,10 +343,25 @@ export default function ExpenseBoxPage() {
                           : "—")}
                       </TableCell>
                       <TableCell className="text-sm">{exp.paymentMethod ? PAYMENT_LABELS[exp.paymentMethod] || exp.paymentMethod : "—"}</TableCell>
+                      <TableCell className="text-sm whitespace-nowrap">{exp.account?.bankName || "—"}</TableCell>
+                      <TableCell className="text-sm whitespace-nowrap font-mono">{exp.accountingMonth || "—"}</TableCell>
                       <TableCell className="text-right font-mono">{formatYen(Number(exp.amount))}</TableCell>
                       <TableCell className="max-w-48 truncate text-sm">{exp.summary || "—"}</TableCell>
                       <TableCell className="whitespace-nowrap text-sm">
-                        {formatReceivedDate(exp.receivedDate)}
+                        <Input
+                          type="date"
+                          className="h-7 text-xs w-28"
+                          value={exp.receivedDate ? exp.receivedDate.split("T")[0] : ""}
+                          onChange={async (e) => {
+                            if (!selectedCompany) return
+                            try {
+                              await updateTransaction(exp.id, selectedCompany.id, { receivedDate: e.target.value || null })
+                              await loadData()
+                            } catch (err) {
+                              alert(err instanceof Error ? err.message : "受領日の更新に失敗しました")
+                            }
+                          }}
+                        />
                       </TableCell>
                       <TableCell>
                         {exp.evidenceNotRequired ? (
@@ -400,6 +440,7 @@ export default function ExpenseBoxPage() {
                 )}
               </TableBody>
             </Table>
+            <Pagination currentPage={page} totalPages={totalPages} onPageChange={(p) => setPage(p)} />
           </CardContent>
         </Card>
       )}

@@ -44,6 +44,7 @@ export async function getExpenseBoxItems(
     evidenceFilter?: "attached" | "not_required" | "missing"
     partnerSearch?: string
     scheduledDateFrom?: string
+    summarySearch?: string
     scheduledDateTo?: string
     showReady?: boolean  // true=準備完了も表示、false=未準備完了のみ
     page?: number
@@ -60,7 +61,7 @@ export async function getExpenseBoxItems(
 
   if (!isAdmin && profile?.assignedCompanyIds) {
     if (!profile.assignedCompanyIds.includes(companyId)) {
-      return []
+      return { data: [], total: 0, totalPages: 0 }
     }
   }
 
@@ -120,10 +121,18 @@ export async function getExpenseBoxItems(
 
   // 取引先検索（部分一致: 正規取引先名 OR 仮取引先名）
   if (filters?.partnerSearch) {
-    where.OR = [
-      { partner: { name: { contains: filters.partnerSearch, mode: "insensitive" } } },
-      { temporaryVendorName: { contains: filters.partnerSearch, mode: "insensitive" } },
-    ]
+    if (!where.AND) where.AND = []
+    ;(where.AND as Record<string, unknown>[]).push({
+      OR: [
+        { partner: { name: { contains: filters.partnerSearch, mode: "insensitive" } } },
+        { temporaryVendorName: { contains: filters.partnerSearch, mode: "insensitive" } },
+      ],
+    })
+  }
+
+  // 摘要検索（部分一致）
+  if (filters?.summarySearch) {
+    where.summary = { contains: filters.summarySearch, mode: "insensitive" }
   }
 
   // 予定日フィルタ
@@ -161,7 +170,7 @@ export async function getExpenseBoxItems(
     },
   })
 
-  return transactions.map((tx) => ({
+  const items = transactions.map((tx) => ({
     id: tx.id,
     companyId: tx.companyId,
     accountId: tx.accountId,

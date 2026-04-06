@@ -219,6 +219,7 @@ export async function updateTransaction(
     invoiceAmount?: string | null
     recordedAmount?: string | null
     transferAmount?: string | null
+    receivedDate?: string | null
   }
 ) {
   const session = await requireSession()
@@ -276,6 +277,7 @@ export async function updateTransaction(
   if (data.invoiceAmount !== undefined) updateData.invoiceAmount = data.invoiceAmount ? BigInt(data.invoiceAmount) : null
   if (data.recordedAmount !== undefined) updateData.recordedAmount = data.recordedAmount ? BigInt(data.recordedAmount) : null
   if (data.transferAmount !== undefined) updateData.transferAmount = data.transferAmount ? BigInt(data.transferAmount) : null
+  if (data.receivedDate !== undefined) updateData.receivedDate = data.receivedDate ? new Date(data.receivedDate) : null
 
   const result = await prisma.transaction.update({
     where: { id },

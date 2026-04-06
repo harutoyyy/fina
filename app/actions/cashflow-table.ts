@@ -5,6 +5,7 @@ import { requireSession } from "@/lib/auth-server"
 import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
 import { createAuditLog } from "@/lib/audit-log"
+import { getCurrentUserProfile } from "@/app/actions/user-profile"
 
 async function verifyCompanyAccess(companyId: string) {
   const company = await prisma.company.findUnique({ where: { id: companyId } })
@@ -58,6 +59,7 @@ export type CashFlowRow = {
   invoiceAmount: string | null
   recordedAmount: string | null
   transferAmount: string | null
+  paymentMethod: string | null
   details: {
     id: string
     midId: string | null
@@ -69,12 +71,22 @@ export type CashFlowRow = {
   }[]
 }
 
+export type CheckpointData = {
+  id: string
+  checkpointDate: string
+  verifiedBalance: string
+  verifiedBy: string
+  verifiedAt: string
+  note: string | null
+}
+
 export type CashFlowTableData = {
   rows: CashFlowRow[]
   openingBalance: string
   totalDeposit: string
   totalWithdrawal: string
   closingBalance: string
+  checkpoints: CheckpointData[]
 }
 
 /**
@@ -148,11 +160,17 @@ export async function getCashFlowTable(
     },
   })
 
-  const monthlyBalance = await prisma.monthlyBalance.findUnique({
-    where: {
-      accountId_yearMonth: { accountId, yearMonth },
-    },
-  })
+  const [monthlyBalance, checkpoints] = await Promise.all([
+    prisma.monthlyBalance.findUnique({
+      where: {
+        accountId_yearMonth: { accountId, yearMonth },
+      },
+    }),
+    prisma.reconciliationCheckpoint.findMany({
+      where: { companyId, accountId, yearMonth },
+      orderBy: { checkpointDate: "asc" },
+    }),
+  ])
 
   let openingBalance: bigint
   if (monthlyBalance) {
@@ -195,6 +213,7 @@ export async function getCashFlowTable(
       invoiceAmount: tx.invoiceAmount?.toString() ?? null,
       recordedAmount: tx.recordedAmount?.toString() ?? null,
       transferAmount: tx.transferAmount?.toString() ?? null,
+      paymentMethod: tx.paymentMethod,
       details: tx.details.map((d) => ({
         id: d.id,
         midId: d.midId,
@@ -215,6 +234,14 @@ export async function getCashFlowTable(
     totalDeposit: totalDeposit.toString(),
     totalWithdrawal: totalWithdrawal.toString(),
     closingBalance: closingBalance.toString(),
+    checkpoints: checkpoints.map((cp) => ({
+      id: cp.id,
+      checkpointDate: cp.checkpointDate.toISOString(),
+      verifiedBalance: cp.verifiedBalance.toString(),
+      verifiedBy: cp.verifiedBy,
+      verifiedAt: cp.verifiedAt.toISOString(),
+      note: cp.note,
+    })),
   }
 }
 
@@ -353,6 +380,11 @@ export async function closeMonth(
   const session = await requireSession()
   await verifyCompanyAccess(companyId)
 
+  const profile = await getCurrentUserProfile()
+  if (profile?.role !== "ADMIN") {
+    throw new Error("月締め操作は管理者のみ実行できます")
+  }
+
   const result = await prisma.monthClose.upsert({
     where: {
       companyId_yearMonth: { companyId, yearMonth },
@@ -394,6 +426,11 @@ export async function reopenMonth(
 ) {
   const session = await requireSession()
   await verifyCompanyAccess(companyId)
+
+  const profile = await getCurrentUserProfile()
+  if (profile?.role !== "ADMIN") {
+    throw new Error("月締め操作は管理者のみ実行できます")
+  }
 
   if (!reason || reason.trim().length === 0) {
     throw new Error("Reopen reason is required")

@@ -23,9 +23,11 @@ import {
   reorderTransactions,
   type CashFlowTableData,
   type CashFlowRow,
+  type CheckpointData,
 } from "@/app/actions/cashflow-table"
+import { createCheckpoint, updateCheckpoint, deleteCheckpoint } from "@/app/actions/reconciliation"
 import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
-import { Printer, GripVertical, ChevronUp, ChevronDown } from "lucide-react"
+import { Printer, GripVertical, ChevronUp, ChevronDown, CheckCircle2, AlertTriangle, Landmark } from "lucide-react"
 import {
   DndContext,
   closestCenter,
@@ -83,6 +85,12 @@ const CLASSIFICATION_LABELS: Record<string, string> = {
   TEMPORARY: "臨時",
 }
 
+const PAYMENT_LABELS: Record<string, string> = {
+  BANK_TRANSFER: "振込",
+  DIRECT_DEBIT: "引落",
+  CASH_WITHDRAWAL: "現金",
+}
+
 const TYPE_TO_PAGE: Record<string, string> = {
   EXPENSE: "/expenses",
   SALES: "/sales",
@@ -119,6 +127,8 @@ function SortableRow({
   onRowClick,
   isSelected,
   isBeingDraggedWithGroup,
+  checkpoint,
+  onSetCheckpoint,
 }: {
   row: CashFlowRow
   isClosed: boolean
@@ -130,6 +140,8 @@ function SortableRow({
   onRowClick: (row: CashFlowRow) => void
   isSelected: boolean
   isBeingDraggedWithGroup: boolean
+  checkpoint: CheckpointData | null
+  onSetCheckpoint: (row: CashFlowRow) => void
 }) {
   const {
     attributes,
@@ -194,14 +206,26 @@ function SortableRow({
           ? (row.partnerId ? row.partnerName : <span className="text-orange-600">{row.partnerName}（仮）</span>)
           : "—"}
       </TableCell>
+      <TableCell className="text-sm">{row.paymentMethod ? PAYMENT_LABELS[row.paymentMethod] || row.paymentMethod : "—"}</TableCell>
       <TableCell className="text-right font-mono text-green-600">
         {deposit > 0 ? formatYen(deposit) : ""}
       </TableCell>
       <TableCell className="text-right font-mono text-red-600">
         {withdrawal < 0 ? formatYen(Math.abs(withdrawal)) : ""}
       </TableCell>
-      <TableCell className="text-right font-mono font-medium">
-        {formatYen(Number(row.runningBalance))}
+      <TableCell className={`text-right font-mono font-medium ${checkpoint ? "border-b-2 border-green-500" : ""}`}>
+        <div className="flex items-center justify-end gap-1">
+          {checkpoint && (
+            <CheckCircle2 className="h-3.5 w-3.5 text-green-600 flex-shrink-0" />
+          )}
+          {formatYen(Number(row.runningBalance))}
+        </div>
+        {checkpoint && Number(checkpoint.verifiedBalance) !== Number(row.runningBalance) && (
+          <div className="flex items-center justify-end gap-1 text-xs text-orange-600 mt-0.5">
+            <AlertTriangle className="h-3 w-3" />
+            差額 {formatYen(Number(row.runningBalance) - Number(checkpoint.verifiedBalance))}
+          </div>
+        )}
       </TableCell>
       <TableCell className="max-w-[200px] truncate">{row.summary || "—"}</TableCell>
       <TableCell className="text-sm">{categoryDisplay}</TableCell>
@@ -214,16 +238,26 @@ function SortableRow({
         </Badge>
       </TableCell>
       <TableCell onClick={(e) => e.stopPropagation()}>
-        {!isClosed && canDefer && (
+        <div className="flex items-center gap-1">
+          {!isClosed && canDefer && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleDeferSingle(row.id)}
+              disabled={deferLoading}
+            >
+              繰延
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => handleDeferSingle(row.id)}
-            disabled={deferLoading}
+            onClick={() => onSetCheckpoint(row)}
+            title={checkpoint ? "照合点編集" : "照合点設定"}
           >
-            繰延
+            <Landmark className={`h-4 w-4 ${checkpoint ? "text-green-600" : ""}`} />
           </Button>
-        )}
+        </div>
       </TableCell>
     </TableRow>
   )
@@ -261,6 +295,12 @@ export default function CashFlowTablePage() {
   const [reorderSaving, setReorderSaving] = useState(false)
   const [prevTableData, setPrevTableData] = useState<CashFlowTableData | null>(null)
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
+
+  // 照合点チェックポイント
+  const [checkpointDialogRow, setCheckpointDialogRow] = useState<CashFlowRow | null>(null)
+  const [checkpointBalance, setCheckpointBalance] = useState("")
+  const [checkpointNote, setCheckpointNote] = useState("")
+  const [checkpointSaving, setCheckpointSaving] = useState(false)
 
   const loadAccounts = useCallback(async (companyId: string) => {
     const accts = await getAccounts(companyId)
@@ -538,6 +578,76 @@ export default function CashFlowTablePage() {
     setReorderPending(null)
     setReorderDay("")
     setPrevTableData(null)
+  }
+
+  // 照合点: 行の日付からチェックポイントをマッチ
+  const getCheckpointForRow = useCallback((row: CashFlowRow): CheckpointData | null => {
+    if (!tableData?.checkpoints) return null
+    const rowDate = row.scheduledDate || row.transactionDate
+    if (!rowDate) return null
+    const rowDateStr = new Date(rowDate).toISOString().split("T")[0]
+    return tableData.checkpoints.find((cp) => {
+      const cpDateStr = new Date(cp.checkpointDate).toISOString().split("T")[0]
+      return cpDateStr === rowDateStr
+    }) ?? null
+  }, [tableData?.checkpoints])
+
+  const handleOpenCheckpointDialog = (row: CashFlowRow) => {
+    const existing = getCheckpointForRow(row)
+    setCheckpointDialogRow(row)
+    setCheckpointBalance(existing ? existing.verifiedBalance : row.runningBalance)
+    setCheckpointNote(existing?.note || "")
+  }
+
+  const handleSaveCheckpoint = async () => {
+    if (!checkpointDialogRow || !selectedCompany || !selectedAccountId) return
+    setCheckpointSaving(true)
+    try {
+      const existing = getCheckpointForRow(checkpointDialogRow)
+      const rowDate = checkpointDialogRow.scheduledDate || checkpointDialogRow.transactionDate
+      if (!rowDate) return
+
+      if (existing) {
+        await updateCheckpoint(existing.id, selectedCompany.id, {
+          verifiedBalance: checkpointBalance,
+          note: checkpointNote || null,
+        })
+      } else {
+        await createCheckpoint({
+          companyId: selectedCompany.id,
+          accountId: selectedAccountId,
+          checkpointDate: new Date(rowDate).toISOString().split("T")[0],
+          yearMonth: selectedMonth,
+          verifiedBalance: checkpointBalance,
+          note: checkpointNote || undefined,
+        })
+      }
+      setCheckpointDialogRow(null)
+      await loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
+    } catch (e) {
+      console.error("Failed to save checkpoint:", e)
+      alert(e instanceof Error ? e.message : "照合点の保存に失敗しました")
+    } finally {
+      setCheckpointSaving(false)
+    }
+  }
+
+  const handleDeleteCheckpoint = async () => {
+    if (!checkpointDialogRow || !selectedCompany) return
+    const existing = getCheckpointForRow(checkpointDialogRow)
+    if (!existing) return
+    if (!confirm("この照合点を削除しますか？")) return
+    setCheckpointSaving(true)
+    try {
+      await deleteCheckpoint(existing.id, selectedCompany.id)
+      setCheckpointDialogRow(null)
+      await loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
+    } catch (e) {
+      console.error("Failed to delete checkpoint:", e)
+      alert(e instanceof Error ? e.message : "照合点の削除に失敗しました")
+    } finally {
+      setCheckpointSaving(false)
+    }
   }
 
   const handleRowDoubleClick = (row: CashFlowRow) => {
@@ -830,6 +940,7 @@ export default function CashFlowTablePage() {
                       <TableHead className="whitespace-nowrap">取引種別</TableHead>
                       <TableHead className="whitespace-nowrap">固定/変動</TableHead>
                       <TableHead className="whitespace-nowrap">取引先</TableHead>
+                      <TableHead className="whitespace-nowrap">支払方法</TableHead>
                       <TableHead className="text-right whitespace-nowrap">入金額</TableHead>
                       <TableHead className="text-right whitespace-nowrap">支払額</TableHead>
                       <TableHead className="text-right whitespace-nowrap">差引残高</TableHead>
@@ -860,6 +971,8 @@ export default function CashFlowTablePage() {
                             selectedRows.has(activeDragId) &&
                             selectedRows.has(row.id)
                           }
+                          checkpoint={getCheckpointForRow(row)}
+                          onSetCheckpoint={handleOpenCheckpointDialog}
                         />
                       ))}
                     </TableBody>
@@ -951,6 +1064,68 @@ export default function CashFlowTablePage() {
               disabled={reorderSaving || !reorderDay}
             >
               {reorderSaving ? "保存中..." : "確定"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 照合点設定ダイアログ */}
+      <Dialog open={checkpointDialogRow !== null} onOpenChange={(open) => { if (!open) setCheckpointDialogRow(null) }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>
+              {checkpointDialogRow && getCheckpointForRow(checkpointDialogRow) ? "照合点編集" : "照合点設定"}
+            </DialogTitle>
+          </DialogHeader>
+          {checkpointDialogRow && (
+            <div className="space-y-4 py-2">
+              <div className="text-sm text-muted-foreground">
+                日付: {checkpointDialogRow.scheduledDate ? formatDate(checkpointDialogRow.scheduledDate) : checkpointDialogRow.transactionDate ? formatDate(checkpointDialogRow.transactionDate) : "—"}
+                <br />
+                現在の差引残高: <span className="font-mono font-medium">{formatYen(Number(checkpointDialogRow.runningBalance))}</span>
+              </div>
+              <div className="space-y-2">
+                <Label>通帳確認残高</Label>
+                <Input
+                  type="number"
+                  value={checkpointBalance}
+                  onChange={(e) => setCheckpointBalance(e.target.value)}
+                  placeholder="通帳の残高を入力"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>メモ</Label>
+                <Input
+                  value={checkpointNote}
+                  onChange={(e) => setCheckpointNote(e.target.value)}
+                  placeholder="照合メモ（任意）"
+                />
+              </div>
+              {checkpointBalance && Number(checkpointBalance) !== Number(checkpointDialogRow.runningBalance) && (
+                <div className="flex items-center gap-2 text-sm text-orange-600 bg-orange-50 dark:bg-orange-950/30 p-2 rounded">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                  残高不一致: 差額 {formatYen(Number(checkpointDialogRow.runningBalance) - Number(checkpointBalance))}
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            {checkpointDialogRow && getCheckpointForRow(checkpointDialogRow) && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleDeleteCheckpoint}
+                disabled={checkpointSaving}
+                className="mr-auto"
+              >
+                削除
+              </Button>
+            )}
+            <Button variant="outline" onClick={() => setCheckpointDialogRow(null)} disabled={checkpointSaving}>
+              キャンセル
+            </Button>
+            <Button onClick={handleSaveCheckpoint} disabled={checkpointSaving || !checkpointBalance}>
+              {checkpointSaving ? "保存中..." : "保存"}
             </Button>
           </DialogFooter>
         </DialogContent>

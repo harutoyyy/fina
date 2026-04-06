@@ -5,6 +5,7 @@ import { requireSession } from "@/lib/auth-server"
 import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
 import { TransactionType, PaymentMethod } from "@prisma/client"
+import { adjustForHoliday } from "@/lib/holidays"
 
 async function verifyCompanyAccess(companyId: string) {
   const company = await prisma.company.findUnique({ where: { id: companyId } })
@@ -173,23 +174,29 @@ function isTargetMonth(frequency: string, specificMonths: number[], month: numbe
   }
 }
 
-function getDueDate(yearMonth: string, dueDayRule: string): Date {
+function getDueDate(yearMonth: string, dueDayRule: string, holidayAdjust?: string): Date {
   const [yearStr, monthStr] = yearMonth.split("-")
   const year = parseInt(yearStr)
   const month = parseInt(monthStr)
 
+  let rawDate: Date
   if (dueDayRule === "MONTH_END") {
-    return new Date(year, month, 0)
+    rawDate = new Date(year, month, 0)
+  } else {
+    const dayMatch = dueDayRule.match(/DAY_(\d+)/)
+    if (dayMatch) {
+      const day = parseInt(dayMatch[1])
+      const lastDay = new Date(year, month, 0).getDate()
+      rawDate = new Date(year, month - 1, Math.min(day, lastDay))
+    } else {
+      rawDate = new Date(year, month - 1, 1)
+    }
   }
 
-  const dayMatch = dueDayRule.match(/DAY_(\d+)/)
-  if (dayMatch) {
-    const day = parseInt(dayMatch[1])
-    const lastDay = new Date(year, month, 0).getDate()
-    return new Date(year, month - 1, Math.min(day, lastDay))
-  }
-
-  return new Date(year, month - 1, 1)
+  return adjustForHoliday(
+    rawDate,
+    (holidayAdjust as "PREV_BUSINESS" | "NEXT_BUSINESS" | "NONE") || "NONE"
+  )
 }
 
 export async function generateRecurringTransactions(companyId: string, yearMonth: string) {
@@ -221,22 +228,34 @@ export async function generateRecurringTransactions(companyId: string, yearMonth
     if (template.amountType === "FIXED" && template.fixedAmount) {
       amount = template.fixedAmount
     } else if (template.amountType === "VARIABLE") {
+      // recurringTemplateId ベースで前月の金額を参照（より正確）
       const prevMonth = getPreviousMonth(yearMonth)
       const prevTransaction = await prisma.transaction.findFirst({
         where: {
-          companyId,
+          recurringTemplateId: template.id,
           accountingMonth: prevMonth,
-          partnerId: template.partnerId,
-          type: template.transactionType,
         },
         orderBy: { createdAt: "desc" },
       })
       if (prevTransaction) {
+        // isDateException の前月トランザクションでも金額は通常通り参照（例外は次月に影響しない）
         amount = prevTransaction.amount
+      } else {
+        // フォールバック: templateId未設定の既存データ向け
+        const fallback = await prisma.transaction.findFirst({
+          where: {
+            companyId,
+            accountingMonth: prevMonth,
+            partnerId: template.partnerId,
+            type: template.transactionType,
+          },
+          orderBy: { createdAt: "desc" },
+        })
+        if (fallback) amount = fallback.amount
       }
     }
 
-    const dueDate = getDueDate(yearMonth, template.dueDayRule)
+    const dueDate = getDueDate(yearMonth, template.dueDayRule, template.holidayAdjust)
 
     const accountingMonth = applyMonthOffset(yearMonth, template.accountingMonthOffset || 0)
 
@@ -250,6 +269,7 @@ export async function generateRecurringTransactions(companyId: string, yearMonth
       summary: template.summary || template.name,
       classification: template.classification,
       paymentMethod: template.paymentMethod,
+      recurringTemplateId: template.id,
     }
 
     if (template.accountId) transactionData.accountId = template.accountId
@@ -285,6 +305,7 @@ export async function generateRecurringTransactions(companyId: string, yearMonth
         classification?: string
         paymentMethod?: PaymentMethod
         partnerId?: string
+        recurringTemplateId?: string
       },
     })
 
@@ -379,19 +400,28 @@ export async function autoGenerateRecurringTransactions(companyId: string) {
           const prevMonth = getPreviousMonth(targetMonth)
           const prevTransaction = await prisma.transaction.findFirst({
             where: {
-              companyId,
+              recurringTemplateId: template.id,
               accountingMonth: prevMonth,
-              partnerId: template.partnerId,
-              type: template.transactionType,
             },
             orderBy: { createdAt: "desc" },
           })
           if (prevTransaction) {
             amount = prevTransaction.amount
+          } else {
+            const fallback = await prisma.transaction.findFirst({
+              where: {
+                companyId,
+                accountingMonth: prevMonth,
+                partnerId: template.partnerId,
+                type: template.transactionType,
+              },
+              orderBy: { createdAt: "desc" },
+            })
+            if (fallback) amount = fallback.amount
           }
         }
 
-        const dueDate = getDueDate(targetMonth, template.dueDayRule)
+        const dueDate = getDueDate(targetMonth, template.dueDayRule, template.holidayAdjust)
         const accountingMonth = applyMonthOffset(targetMonth, template.accountingMonthOffset || 0)
 
         // 口座を解決
@@ -427,6 +457,7 @@ export async function autoGenerateRecurringTransactions(companyId: string) {
             classification: template.classification,
             paymentMethod: template.paymentMethod,
             partnerId: template.partnerId,
+            recurringTemplateId: template.id,
           },
         })
 
