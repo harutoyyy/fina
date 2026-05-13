@@ -1,8 +1,8 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { useCompany, isAllCompanies } from "@/contexts/company-context"
-import { AllCompaniesBanner } from "@/components/all-companies-banner"
+import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -92,7 +92,7 @@ export default function ExpenseBoxPage() {
   const [totalPages, setTotalPages] = useState(1)
 
   const loadData = useCallback(async () => {
-    if (!selectedCompany || isAllCompanies(selectedCompany)) return
+    if (!selectedCompany) return
     setLoading(true)
     try {
       const filters: Parameters<typeof getExpenseBoxItems>[1] = {
@@ -167,25 +167,14 @@ export default function ExpenseBoxPage() {
   const draftCount = expenses.filter((e) => e.status === "DRAFT").length
   const readyCount = expenses.filter((e) => e.status === "READY").length
 
-  if (isAllCompanies(selectedCompany)) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">受領BOX</h1>
-          <p className="text-muted-foreground">全社合算モード</p>
-        </div>
-        <AllCompaniesBanner feature="受領BOX" />
-      </div>
-    )
-  }
-
   if (!selectedCompany) {
     return (
       <div className="space-y-6">
-        <div>
+        <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight">受領BOX</h1>
-          <p className="text-muted-foreground">会社を選択してください</p>
+          <CompanySwitcher />
         </div>
+        <p className="text-muted-foreground">会社を選択してください</p>
       </div>
     )
   }
@@ -196,10 +185,11 @@ export default function ExpenseBoxPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">受領BOX</h1>
           <p className="text-muted-foreground">
-            今日届いた請求書・通知書を処理する
+            {selectedCompany.name}: 今日届いた請求書・通知書を処理する
             {isAdmin && " （管理者）"}
           </p>
         </div>
+        <CompanySwitcher />
       </div>
 
       {/* フィルタ */}

@@ -1,7 +1,8 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { useCompany, isAllCompanies } from "@/contexts/company-context"
+import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -36,10 +37,8 @@ export default function DashboardPage() {
   const [groupSummary, setGroupSummary] = useState<GroupSummary | null>(null)
   const [groupMonth, setGroupMonth] = useState(getCurrentMonth())
 
-  const isAll = isAllCompanies(selectedCompany)
-
   const loadData = useCallback(async () => {
-    if (!selectedCompany || isAll) {
+    if (!selectedCompany) {
       setData(null)
       return
     }
@@ -52,7 +51,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false)
     }
-  }, [selectedCompany, isAll])
+  }, [selectedCompany])
 
   const loadGroupSummary = useCallback(async () => {
     try {
@@ -73,15 +72,14 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">ダッシュボード</h1>
-        <p className="text-muted-foreground">
-          {isAll
-            ? "全社合算ビュー: グループ別サマリで全社状況を確認できます"
-            : selectedCompany
-              ? `${selectedCompany.name} の概要`
-              : "会社を選択してください"}
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">ダッシュボード</h1>
+          <p className="text-muted-foreground">
+            {selectedCompany ? `${selectedCompany.name} の概要` : "会社を選択してください"}
+          </p>
+        </div>
+        <CompanySwitcher />
       </div>
 
       {/* 会社グループ・全社サマリタイル（PDF P1） */}
@@ -180,7 +178,6 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
 
-      {!isAll && (
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -223,9 +220,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-      )}
 
-      {!isAll && (
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -252,9 +247,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-      )}
 
-      {!isAll && data && data.mainAccountTransactions.length > 0 && (
+      {data && data.mainAccountTransactions.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">
@@ -308,7 +302,7 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {!selectedCompany && !isAll && (
+      {!selectedCompany && (
         <Card>
           <CardHeader>
             <CardTitle>セットアップガイド</CardTitle>

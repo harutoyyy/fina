@@ -30,7 +30,7 @@
 | 種別（資金移動/振込/引落/入金/現金） | ✅ | 同 L88-93 `PAYMENT_LABELS` |
 | 確定線（手動） | ✅ | 「照合点」として実装 (`app/actions/reconciliation.ts`、Landmarkアイコン) |
 | ダブルクリックで編集 | ✅ | `cashflow-table/page.tsx` L176 |
-| 同日同時ルール（引落＞資金移動・振込・現金＞入金） | ❌ | `app/actions/cashflow-table.ts` は displayOrder + date のみ |
+| 同日同時ルール（引落＞資金移動・振込・現金＞入金） | ✅ | Phase 1 で実装。`app/actions/cashflow-table.ts` の `paymentPriority` 関数（L96〜）→ `getCashFlowTable` の同日内ソート（L192） |
 | ドラッグ&ドロップ並べ替え＋日付変更ポップアップ | ✅ | dnd-kit, L1030 |
 | 残高即時再計算 | ✅ | runningBalance 計算 |
 | 帳票作成（資金移動・現金 → PDF） | △ | `window.print()` のみ、PDFテンプレなし |
@@ -55,13 +55,13 @@
 |---|---|---|
 | 売上一覧（実入金日/予定/元請/請求/入金/差額） | ✅ | `sales/page.tsx` L456 |
 | 差額内訳（手数料/会費/現場経費/立替/値引値上/前倒/保留金） | ✅ | `components/deduction-details-panel.tsx` |
-| 内訳の前回値自動反映 | △ | 要件定義書では「項目のみ前月自動コピー」記載あり、実装要確認 |
+| 内訳の前回値自動反映 | ✅ | Phase 1 で実装。`components/deduction-details-panel.tsx` 起動時に `copyPreviousDeductions` 自動呼出（金額0で項目のみコピー） |
 | 資金繰表へ展開表示（差額内訳を子行で） | △ | 子明細あり、UI展開要確認 |
 | DXより出力（売上） | ❌ | DX連携未実装 |
 | DX外売上手入力（地代/雑/派遣） | ❌ | 業種別集計の仕組みなし |
-| Aグループ売上一覧（A工業と同形式） | ❌ | グループ会社の親概念がスキーマに無い |
-| グループ売上（双方の会社に自動反映） | ❌ | – |
-| 業種フィルター（建設/広告/その他） | △ | `Company.industryType` に文字列、フィルタUIなし |
+| Aグループ売上一覧（A工業と同形式） | △ | Phase 2 で `CompanyGroup` 概念は導入済。ただし「グループ集約の売上一覧画面」自体は未実装 |
+| グループ売上（双方の会社に自動反映） | ✅ | Phase 3 で `inter-group` メニュー実装。`linkedTransactionId` で双方向自動反映 |
+| 業種フィルター（建設/広告/その他） | △ | Phase 1 で業種マスタ + 会社FK化（`IndustryMaster` / `Company.industryMasterId`）は完了。ただし売上/原価ページの業種フィルタUIは未実装 |
 
 ### 📄 P5: 原価支払
 
@@ -71,7 +71,7 @@
 | 下請支払（DXより） | ❌ | DX連携なし |
 | 控除内訳（会費/保険料/現場経費/立替代/その他、デフォルト登録） | △ | DeductionDetailsPanel あり、デフォルト分類は弱い |
 | 作業員給与は給与入力から反映 | △ | 給与モジュールあり、自動反映ロジック要確認 |
-| グループ会社支払 → グループ間入力で | ❌ | グループ間入力メニュー自体なし |
+| グループ会社支払 → グループ間入力で | ✅ | Phase 3 で `/inter-group` ページ + 双方向ミラーリング実装 |
 | 内訳（道具代/貸金/家賃 などのデフォルト相手先・科目） | △ | 汎用入力で対応、特化UIなし |
 
 ### 📄 P6: 給与入力
@@ -100,7 +100,7 @@
 |---|---|---|
 | 借入一覧、月別残高 | ✅ | `loans/page.tsx` L481 |
 | 設定画面：返済方法/頻度/返済日/回数/金利タイプ/金利%/元金調整 | ✅ | L237-377 |
-| 保証協会チェックボックス | ❌ | – |
+| 保証協会チェックボックス | ✅ | Phase 1 で実装。`LoanContract.isGuaranteeAssociation` + `loans` ページに Checkbox + 一覧 Badge |
 | 適用日付以降のみ変更（経過分は再計算しない） | △ | ロジック要確認 |
 | 月返済額：自動計算＋手入力可、`借入額 ÷ 回数 = 100未満切捨 返済額 × (回数-1) = 元金調整額` | △ | スケジュール生成あり、計算式は要確認 |
 | カレンダー自動読込（祝前祝後設定） | △ | `lib/holidays.ts` あり、UI連携要確認 |
@@ -111,7 +111,7 @@
 
 | PDF構想 | 状況 | 根拠／メモ |
 |---|---|---|
-| リース一覧（代表/車/その他フィルタ、月別年額） | △ | 基本一覧のみ、車種分類フィールドなし (`leases/page.tsx`) |
+| リース一覧（代表/車/その他フィルタ、月別年額） | ✅ | Phase 1 で `LeaseContract.assetCategory/vehicleModel/vehicleNumber` 追加。`leases/page.tsx` に分類セレクト + フィルタ |
 | リース設定（定額/残クレ/回数、再リース、毎月支払日カレンダー読込） | △ | 基本項目のみ |
 | 車のみ支払シミュレーション（車種/NO × 月別） | ✅ | Phase 3 で実装。`getVehicleLeaseMatrix` + `VehicleMatrixDialog` で車両分類リースの月別マトリクスを表示（行=契約・列=月・合計列・月合計行付き） |
 | **納税予定表** | ✅ | Phase 2 で実装。`/tax-schedule` ページ + `TaxPaymentSchedule` テーブル + 中間納税自動生成 |
@@ -125,7 +125,7 @@
 |---|---|---|
 | 1. 会社マスタ（社名/略称/業種/決算月/口座/住所/代表者/法人番号/インボイス番号） | ✅ | `master/companies` |
 | 2. 銀行マスタ（銀行・支店） | ✅ | `master/banks` |
-| 3. 業種マスタ（建設/広告/その他、追加可） | ❌ | テーブルなし、`Company.industryType` の文字列のみ |
+| 3. 業種マスタ（建設/広告/その他、追加可） | ✅ | Phase 1 で実装。`IndustryMaster` モデル + `/master/industries` 画面 + `Company.industryMasterId` FK化、初期値 建設/広告/その他 |
 | 4. 種別設定（資金移動/振込/引落/入金/現金 + 固定/変動/臨時/定期） | ✅ | enum 実装あり、UIの種別マスタ画面はない |
 | 売上原価内訳マスタ（「いらない」とメモあり） | – | – |
 | 5. 結合グループ | ✅ | Phase 2 で実装。`/master/company-groups` ページ + `CompanyGroup` / `CompanyGroupMember` テーブル |

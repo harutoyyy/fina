@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useSearchParams } from "next/navigation"
-import { useCompany, isAllCompanies } from "@/contexts/company-context"
-import { AllCompaniesBanner } from "@/components/all-companies-banner"
+import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -312,14 +312,14 @@ export default function ExpensesPage() {
   }, [filterMonth, filterStatus, showConfirmed])
 
   useEffect(() => {
-    if (selectedCompany && !isAllCompanies(selectedCompany)) {
+    if (selectedCompany) {
       loadMasterData(selectedCompany.id)
       loadTemplates(selectedCompany.id)
     }
   }, [selectedCompany, loadMasterData, loadTemplates])
 
   useEffect(() => {
-    if (selectedCompany && !isAllCompanies(selectedCompany) && activeTab === "TEMPORARY") {
+    if (selectedCompany && activeTab === "TEMPORARY") {
       loadTransactions(selectedCompany.id)
     }
   }, [selectedCompany, activeTab, loadTransactions])
@@ -642,34 +642,26 @@ export default function ExpensesPage() {
   // ============================================================
   // レンダリング
   // ============================================================
-  if (isAllCompanies(selectedCompany)) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">経費入力</h1>
-          <p className="text-muted-foreground">全社合算モード</p>
-        </div>
-        <AllCompaniesBanner feature="経費入力" />
-      </div>
-    )
-  }
-
   if (!selectedCompany) {
     return (
       <div className="space-y-6">
-        <div>
+        <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight">経費入力</h1>
-          <p className="text-muted-foreground">会社を選択してください</p>
+          <CompanySwitcher />
         </div>
+        <p className="text-muted-foreground">会社を選択してください</p>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">経費入力</h1>
-        <p className="text-muted-foreground">{selectedCompany.name} の経費を入力・管理します</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">経費入力</h1>
+          <p className="text-muted-foreground">{selectedCompany.name} の経費を入力・管理します</p>
+        </div>
+        <CompanySwitcher />
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>

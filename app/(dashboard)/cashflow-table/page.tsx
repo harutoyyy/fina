@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useRouter } from "next/navigation"
-import { useCompany, isAllCompanies } from "@/contexts/company-context"
-import { AllCompaniesBanner } from "@/components/all-companies-banner"
+import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -337,13 +337,13 @@ export default function CashFlowTablePage() {
   }, [])
 
   useEffect(() => {
-    if (selectedCompany && !isAllCompanies(selectedCompany)) {
+    if (selectedCompany) {
       loadAccounts(selectedCompany.id)
     }
   }, [selectedCompany, loadAccounts])
 
   useEffect(() => {
-    if (selectedCompany && !isAllCompanies(selectedCompany) && selectedAccountId && selectedMonth) {
+    if (selectedCompany && selectedAccountId && selectedMonth) {
       loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
     }
   }, [selectedCompany, selectedAccountId, selectedMonth, loadTableData])
@@ -717,25 +717,14 @@ export default function CashFlowTablePage() {
 
   const isClosed = monthCloseStatus?.isClosed === true
 
-  if (isAllCompanies(selectedCompany)) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">資金繰り表</h1>
-          <p className="text-muted-foreground">全社合算モード</p>
-        </div>
-        <AllCompaniesBanner feature="資金繰り表" />
-      </div>
-    )
-  }
-
   if (!selectedCompany) {
     return (
       <div className="space-y-6">
-        <div>
+        <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight">資金繰り表</h1>
-          <p className="text-muted-foreground">会社を選択してください</p>
+          <CompanySwitcher />
         </div>
+        <p className="text-muted-foreground">会社を選択してください</p>
       </div>
     )
   }
@@ -748,6 +737,7 @@ export default function CashFlowTablePage() {
           <p className="text-muted-foreground">{selectedCompany.name} の資金繰り表</p>
         </div>
         <div className="flex items-center gap-2">
+          <CompanySwitcher />
           {!isClosed && selectedRows.size > 0 && (
             <>
               <Button

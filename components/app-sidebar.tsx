@@ -33,12 +33,11 @@ import {
   Tag,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { CompanySwitcher } from "@/components/company-switcher"
 import { Separator } from "@/components/ui/separator"
 
 const navigation = [
   { name: "ダッシュボード", href: "/dashboard", icon: LayoutDashboard },
-  { name: "全社合算ビュー", href: "/all-companies", icon: Layers },
+  { name: "グループ別サマリ", href: "/group-summary", icon: Layers },
   { name: "資金繰り表", href: "/cashflow-table", icon: TableProperties },
   { name: "資金移動", href: "/cashflow", icon: ArrowRightLeft },
 ]
@@ -105,10 +104,7 @@ export function AppSidebar() {
           経理くん
         </Link>
       </div>
-      <div className="p-4">
-        <CompanySwitcher />
-      </div>
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4">
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {navigation.map((item) => (
           <NavItem key={item.href} item={item} pathname={pathname} />
         ))}
