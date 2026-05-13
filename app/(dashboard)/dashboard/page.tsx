@@ -1,13 +1,18 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { useCompany } from "@/contexts/company-context"
+import { useCompany, isAllCompanies } from "@/contexts/company-context"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { Building2, CreditCard, Handshake, FileText, Inbox, TrendingUp } from "lucide-react"
+import { Building2, CreditCard, Handshake, FileText, Inbox, TrendingUp, Layers } from "lucide-react"
 import { getDashboardData, type DashboardSummary } from "@/app/actions/dashboard"
-import { formatYen, formatDate } from "@/lib/format"
+import { getGroupDashboardSummary } from "@/app/actions/company-groups"
+import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
+
+type GroupSummary = Awaited<ReturnType<typeof getGroupDashboardSummary>>
 
 const TYPE_LABELS: Record<string, string> = {
   EXPENSE: "経費",
@@ -28,9 +33,16 @@ export default function DashboardPage() {
   const { selectedCompany } = useCompany()
   const [data, setData] = useState<DashboardSummary | null>(null)
   const [loading, setLoading] = useState(false)
+  const [groupSummary, setGroupSummary] = useState<GroupSummary | null>(null)
+  const [groupMonth, setGroupMonth] = useState(getCurrentMonth())
+
+  const isAll = isAllCompanies(selectedCompany)
 
   const loadData = useCallback(async () => {
-    if (!selectedCompany) return
+    if (!selectedCompany || isAll) {
+      setData(null)
+      return
+    }
     setLoading(true)
     try {
       const result = await getDashboardData(selectedCompany.id)
@@ -40,21 +52,135 @@ export default function DashboardPage() {
     } finally {
       setLoading(false)
     }
-  }, [selectedCompany])
+  }, [selectedCompany, isAll])
+
+  const loadGroupSummary = useCallback(async () => {
+    try {
+      const res = await getGroupDashboardSummary({ yearMonth: groupMonth })
+      setGroupSummary(res)
+    } catch (e) {
+      console.error("Failed to load group summary:", e)
+    }
+  }, [groupMonth])
 
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  useEffect(() => {
+    loadGroupSummary()
+  }, [loadGroupSummary])
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">ダッシュボード</h1>
         <p className="text-muted-foreground">
-          {selectedCompany ? `${selectedCompany.name} の概要` : "会社を選択してください"}
+          {isAll
+            ? "全社合算ビュー: グループ別サマリで全社状況を確認できます"
+            : selectedCompany
+              ? `${selectedCompany.name} の概要`
+              : "会社を選択してください"}
         </p>
       </div>
 
+      {/* 会社グループ・全社サマリタイル（PDF P1） */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Layers className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-base">グループ別サマリ</CardTitle>
+          </div>
+          <div className="flex items-center gap-2">
+            <Label className="text-sm whitespace-nowrap">対象月</Label>
+            <Input
+              type="month"
+              value={groupMonth}
+              onChange={(e) => setGroupMonth(e.target.value)}
+              className="w-36"
+            />
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!groupSummary ? (
+            <p className="text-muted-foreground text-sm">読み込み中...</p>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-lg border p-4 bg-primary/5">
+                <div className="text-xs text-muted-foreground">全社合計</div>
+                <div className="font-semibold mt-1">
+                  {groupSummary.allCompaniesTile.companyCount}社
+                </div>
+                <div className="mt-2 space-y-0.5 text-sm font-mono">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">残高</span>
+                    <span>{formatYen(BigInt(groupSummary.allCompaniesTile.balance))}</span>
+                  </div>
+                  <div className="flex justify-between text-green-700">
+                    <span>入金</span>
+                    <span>{formatYen(BigInt(groupSummary.allCompaniesTile.income))}</span>
+                  </div>
+                  <div className="flex justify-between text-red-700">
+                    <span>出金</span>
+                    <span>{formatYen(BigInt(groupSummary.allCompaniesTile.expense))}</span>
+                  </div>
+                </div>
+              </div>
+
+              {groupSummary.groupTiles.map((tile) => (
+                <div
+                  key={tile.id}
+                  className="rounded-lg border p-4"
+                  style={
+                    tile.colorCode
+                      ? { borderLeftWidth: 4, borderLeftColor: tile.colorCode }
+                      : undefined
+                  }
+                >
+                  <div className="text-xs text-muted-foreground">{tile.name}</div>
+                  <div className="font-semibold mt-1">{tile.companyCount}社</div>
+                  <div className="mt-2 space-y-0.5 text-sm font-mono">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">残高</span>
+                      <span>{formatYen(BigInt(tile.balance))}</span>
+                    </div>
+                    <div className="flex justify-between text-green-700">
+                      <span>入金</span>
+                      <span>{formatYen(BigInt(tile.income))}</span>
+                    </div>
+                    <div className="flex justify-between text-red-700">
+                      <span>出金</span>
+                      <span>{formatYen(BigInt(tile.expense))}</span>
+                    </div>
+                  </div>
+                  {tile.companyNames.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {tile.companyNames.slice(0, 4).map((n, i) => (
+                        <Badge key={i} variant="outline" className="text-xs">
+                          {n}
+                        </Badge>
+                      ))}
+                      {tile.companyNames.length > 4 && (
+                        <Badge variant="outline" className="text-xs">
+                          +{tile.companyNames.length - 4}
+                        </Badge>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {groupSummary.groupTiles.length === 0 && (
+                <div className="col-span-full text-sm text-muted-foreground border rounded-lg p-4">
+                  会社グループが未登録です。マスタ →「会社グループ」から作成してください。
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {!isAll && (
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -97,7 +223,9 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+      )}
 
+      {!isAll && (
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -124,8 +252,9 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+      )}
 
-      {data && data.mainAccountTransactions.length > 0 && (
+      {!isAll && data && data.mainAccountTransactions.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">
@@ -179,7 +308,7 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {!selectedCompany && (
+      {!selectedCompany && !isAll && (
         <Card>
           <CardHeader>
             <CardTitle>セットアップガイド</CardTitle>

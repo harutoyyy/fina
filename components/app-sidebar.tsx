@@ -25,6 +25,12 @@ import {
   MinusCircle,
   Inbox,
   Banknote,
+  Factory,
+  ScrollText,
+  Wallet,
+  Layers,
+  GitMerge,
+  Tag,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { CompanySwitcher } from "@/components/company-switcher"
@@ -32,6 +38,7 @@ import { Separator } from "@/components/ui/separator"
 
 const navigation = [
   { name: "ダッシュボード", href: "/dashboard", icon: LayoutDashboard },
+  { name: "全社合算ビュー", href: "/all-companies", icon: Layers },
   { name: "資金繰り表", href: "/cashflow-table", icon: TableProperties },
   { name: "資金移動", href: "/cashflow", icon: ArrowRightLeft },
 ]
@@ -42,20 +49,26 @@ const inputNavigation = [
   { name: "売上入力", href: "/sales", icon: TrendingUp },
   { name: "原価支払", href: "/costs", icon: Hammer },
   { name: "給与入力", href: "/salary", icon: Users },
+  { name: "グループ間入力", href: "/inter-group", icon: GitMerge },
 ]
 
 const managementNavigation = [
   { name: "現金引出", href: "/cash-withdrawal", icon: Banknote },
   { name: "借入管理", href: "/loans", icon: Landmark },
   { name: "リース管理", href: "/leases", icon: Repeat },
+  { name: "納税予定表", href: "/tax-schedule", icon: ScrollText },
+  { name: "カード明細", href: "/card-statements", icon: Wallet },
   { name: "定期テンプレート", href: "/recurring", icon: BookOpen },
   { name: "月次処理", href: "/monthly-close", icon: CalendarCheck },
 ]
 
 const masterNavigation = [
   { name: "会社一覧", href: "/master/companies", icon: Building2 },
+  { name: "会社グループ", href: "/master/company-groups", icon: Layers },
   { name: "銀行口座", href: "/master/accounts", icon: CreditCard },
   { name: "銀行・支店", href: "/master/banks", icon: Building },
+  { name: "業種", href: "/master/industries", icon: Factory },
+  { name: "売上項目", href: "/master/sales-items", icon: Tag },
   { name: "取引先", href: "/master/partners", icon: Handshake },
   { name: "給与グループ", href: "/master/payroll-groups", icon: UserCog },
   { name: "勘定科目", href: "/master/categories", icon: FolderTree },

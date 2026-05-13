@@ -49,6 +49,9 @@ export async function createLease(data: {
   accountId?: string
   midId?: string
   subId?: string
+  assetCategory?: string
+  vehicleModel?: string
+  vehicleNumber?: string
 }) {
   await requireSession()
 
@@ -67,6 +70,9 @@ export async function createLease(data: {
       accountId: data.accountId || undefined,
       midId: data.midId || undefined,
       subId: data.subId || undefined,
+      assetCategory: data.assetCategory || "OTHER",
+      vehicleModel: data.vehicleModel || undefined,
+      vehicleNumber: data.vehicleNumber || undefined,
     },
   })
 
@@ -129,6 +135,9 @@ export async function updateLease(
     midId?: string | null
     subId?: string | null
     status?: string
+    assetCategory?: string
+    vehicleModel?: string | null
+    vehicleNumber?: string | null
   }
 ) {
   await requireSession()
@@ -152,6 +161,9 @@ export async function updateLease(
   if (data.midId !== undefined) updateData.midId = data.midId
   if (data.subId !== undefined) updateData.subId = data.subId
   if (data.status !== undefined) updateData.status = data.status
+  if (data.assetCategory !== undefined) updateData.assetCategory = data.assetCategory
+  if (data.vehicleModel !== undefined) updateData.vehicleModel = data.vehicleModel
+  if (data.vehicleNumber !== undefined) updateData.vehicleNumber = data.vehicleNumber
 
   const result = await prisma.leaseContract.update({
     where: { id },
@@ -256,4 +268,79 @@ export async function markLeaseSchedulePaid(
 
   revalidatePath("/leases")
   return bigintToJson(result)
+}
+
+// ============================================================
+// 車両支払シミュレーション（PDF P9）
+// assetCategory='VEHICLE' のリース契約 × 月 マトリクスを返す
+// ============================================================
+
+export async function getVehicleLeaseMatrix(params: {
+  companyId: string
+  fromMonth: string // "YYYY-MM"
+  toMonth: string   // "YYYY-MM"
+}) {
+  await requireSession()
+  if (!/^\d{4}-\d{2}$/.test(params.fromMonth) || !/^\d{4}-\d{2}$/.test(params.toMonth)) {
+    throw new Error("月の形式が不正です")
+  }
+
+  const leases = await prisma.leaseContract.findMany({
+    where: {
+      companyId: params.companyId,
+      assetCategory: "VEHICLE",
+    },
+    orderBy: { contractName: "asc" },
+    include: {
+      schedules: {
+        orderBy: { paymentNumber: "asc" },
+      },
+    },
+  })
+
+  // 月リストを生成
+  const months: string[] = []
+  const [fy, fm] = params.fromMonth.split("-").map(Number)
+  const [ty, tm] = params.toMonth.split("-").map(Number)
+  let y = fy
+  let m = fm
+  while (y < ty || (y === ty && m <= tm)) {
+    months.push(`${y}-${String(m).padStart(2, "0")}`)
+    m++
+    if (m > 12) { m = 1; y++ }
+  }
+
+  const rows = leases.map((lease) => {
+    const monthMap = new Map<string, bigint>()
+    for (const s of lease.schedules) {
+      const ym = `${s.dueDate.getFullYear()}-${String(s.dueDate.getMonth() + 1).padStart(2, "0")}`
+      monthMap.set(ym, (monthMap.get(ym) ?? BigInt(0)) + s.amount)
+    }
+    const cells = months.map((ym) => monthMap.get(ym)?.toString() ?? null)
+    const total = months.reduce(
+      (acc, ym) => acc + (monthMap.get(ym) ?? BigInt(0)),
+      BigInt(0)
+    )
+    return {
+      id: lease.id,
+      contractName: lease.contractName,
+      vehicleModel: lease.vehicleModel ?? "",
+      vehicleNumber: lease.vehicleNumber ?? "",
+      monthlyAmount: lease.monthlyAmount.toString(),
+      cells,
+      total: total.toString(),
+    }
+  })
+
+  const monthTotals = months.map((ym, i) => {
+    return rows
+      .reduce((acc, r) => acc + (r.cells[i] ? BigInt(r.cells[i]!) : BigInt(0)), BigInt(0))
+      .toString()
+  })
+
+  return {
+    months,
+    rows,
+    monthTotals,
+  }
 }

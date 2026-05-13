@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useSearchParams } from "next/navigation"
-import { useCompany } from "@/contexts/company-context"
+import { useCompany, isAllCompanies } from "@/contexts/company-context"
+import { AllCompaniesBanner } from "@/components/all-companies-banner"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -311,14 +312,14 @@ export default function ExpensesPage() {
   }, [filterMonth, filterStatus, showConfirmed])
 
   useEffect(() => {
-    if (selectedCompany) {
+    if (selectedCompany && !isAllCompanies(selectedCompany)) {
       loadMasterData(selectedCompany.id)
       loadTemplates(selectedCompany.id)
     }
   }, [selectedCompany, loadMasterData, loadTemplates])
 
   useEffect(() => {
-    if (selectedCompany && activeTab === "TEMPORARY") {
+    if (selectedCompany && !isAllCompanies(selectedCompany) && activeTab === "TEMPORARY") {
       loadTransactions(selectedCompany.id)
     }
   }, [selectedCompany, activeTab, loadTransactions])
@@ -641,6 +642,18 @@ export default function ExpensesPage() {
   // ============================================================
   // レンダリング
   // ============================================================
+  if (isAllCompanies(selectedCompany)) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">経費入力</h1>
+          <p className="text-muted-foreground">全社合算モード</p>
+        </div>
+        <AllCompaniesBanner feature="経費入力" />
+      </div>
+    )
+  }
+
   if (!selectedCompany) {
     return (
       <div className="space-y-6">

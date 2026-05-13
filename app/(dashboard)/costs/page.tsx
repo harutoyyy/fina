@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { useCompany } from "@/contexts/company-context"
 import { getAccounts } from "@/app/actions/accounts"
+import TransactionExcelImport from "@/components/transaction-excel-import"
 import { getPartners } from "@/app/actions/partners"
 import { getTransactions, createTransaction, updateTransaction, updateTransactionStatus, deleteTransaction, type TransactionWithRelations } from "@/app/actions/transactions"
 import { formatYen, getCurrentMonth, formatDate } from "@/lib/format"
@@ -248,7 +249,17 @@ export default function CostsPage() {
           <h1 className="text-2xl font-bold tracking-tight">原価支払</h1>
           <p className="text-muted-foreground">工事原価の支払いを管理します</p>
         </div>
-        <Button onClick={openCreateDialog} disabled={!selectedCompany}>新規登録</Button>
+        <div className="flex items-center gap-2">
+          {selectedCompany && (
+            <TransactionExcelImport
+              mode="COST"
+              companyId={selectedCompany.id}
+              accounts={accounts}
+              onComplete={loadData}
+            />
+          )}
+          <Button onClick={openCreateDialog} disabled={!selectedCompany}>新規登録</Button>
+        </div>
       </div>
 
       <Card>

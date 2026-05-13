@@ -3,13 +3,13 @@
   "configurations": [
     {
       "name": "fina",
-      "runtimeExecutable": "/usr/local/bin/node",
+      "runtimeExecutable": "/Users/haruto/.volta/bin/node",
       "runtimeArgs": ["node_modules/next/dist/bin/next", "dev", "-p", "3003", "-H", "0.0.0.0", "--webpack"],
       "port": 3003
     },
     {
       "name": "kakeibo",
-      "runtimeExecutable": "/usr/local/bin/node",
+      "runtimeExecutable": "/Users/haruto/.volta/bin/node",
       "runtimeArgs": ["/Users/haruto/myprojects/kakeibo/node_modules/vite/bin/vite.js", "--port", "5173"],
       "port": 5173
     }

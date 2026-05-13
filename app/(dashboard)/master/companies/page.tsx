@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { useCompany } from "@/contexts/company-context"
 import { getCompanies, updateCompany } from "@/app/actions/companies"
+import { getIndustries } from "@/app/actions/industries"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
@@ -14,14 +15,18 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Pencil, Loader2 } from "lucide-react"
 
 type CompanyWithCounts = Awaited<ReturnType<typeof getCompanies>>[number]
+type IndustryOption = Awaited<ReturnType<typeof getIndustries>>[number]
+
+const INDUSTRY_NONE = "__none__"
 
 export default function CompaniesPage() {
   const [companies, setCompanies] = useState<CompanyWithCounts[]>([])
+  const [industries, setIndustries] = useState<IndustryOption[]>([])
   const [loading, setLoading] = useState(true)
   const [editCompany, setEditCompany] = useState<CompanyWithCounts | null>(null)
   const [saving, setSaving] = useState(false)
   const [formData, setFormData] = useState({
-    name: "", nameKana: "", shortName: "", industryType: "",
+    name: "", nameKana: "", shortName: "", industryType: "", industryMasterId: "",
     representativeTitle: "", representativeName: "",
     postalCode: "", addressPrefecture: "", addressCity: "", addressStreet: "", addressBuilding: "",
     phone: "", fax: "", email: "", website: "",
@@ -31,8 +36,9 @@ export default function CompaniesPage() {
 
   const loadCompanies = async () => {
     setLoading(true)
-    const data = await getCompanies()
+    const [data, industryData] = await Promise.all([getCompanies(), getIndustries()])
     setCompanies(data)
+    setIndustries(industryData)
     setLoading(false)
   }
 
@@ -42,7 +48,9 @@ export default function CompaniesPage() {
     setEditCompany(company)
     setFormData({
       name: company.name, nameKana: company.nameKana || "", shortName: company.shortName || "",
-      industryType: company.industryType || "", representativeTitle: company.representativeTitle || "",
+      industryType: company.industryType || "",
+      industryMasterId: company.industryMasterId || "",
+      representativeTitle: company.representativeTitle || "",
       representativeName: company.representativeName || "", postalCode: company.postalCode || "",
       addressPrefecture: company.addressPrefecture || "", addressCity: company.addressCity || "",
       addressStreet: company.addressStreet || "", addressBuilding: company.addressBuilding || "",
@@ -58,8 +66,10 @@ export default function CompaniesPage() {
   const handleSave = async () => {
     if (!editCompany) return
     setSaving(true)
+    const { industryMasterId, ...rest } = formData
     await updateCompany(editCompany.id, {
-      ...formData,
+      ...rest,
+      industryMasterId: industryMasterId || null,
       nameKana: formData.nameKana || undefined,
       shortName: formData.shortName || undefined,
       industryType: formData.industryType || undefined,
@@ -120,7 +130,7 @@ export default function CompaniesPage() {
                     <TableCell>{company.displayOrder}</TableCell>
                     <TableCell className="font-medium">{company.name}</TableCell>
                     <TableCell>{company.shortName || "-"}</TableCell>
-                    <TableCell>{company.industryType || "-"}</TableCell>
+                    <TableCell>{company.industryMaster?.name ?? company.industryType ?? "-"}</TableCell>
                     <TableCell>{company.fiscalMonth}月</TableCell>
                     <TableCell>
                       <Badge variant={company.status === "ACTIVE" ? "default" : "secondary"}>
@@ -165,7 +175,20 @@ export default function CompaniesPage() {
               </div>
               <div className="space-y-2">
                 <Label>業種</Label>
-                <Input value={formData.industryType} onChange={(e) => setFormData({ ...formData, industryType: e.target.value })} />
+                <Select
+                  value={formData.industryMasterId || INDUSTRY_NONE}
+                  onValueChange={(v) => setFormData({ ...formData, industryMasterId: v === INDUSTRY_NONE ? "" : v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="業種を選択" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={INDUSTRY_NONE}>未設定</SelectItem>
+                    {industries.filter((i) => i.isActive).map((i) => (
+                      <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">

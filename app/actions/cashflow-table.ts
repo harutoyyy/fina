@@ -90,6 +90,27 @@ export type CashFlowTableData = {
 }
 
 /**
+ * 同日同時ルール: 引落(0) > 資金移動/振込/現金(1) > 入金(2)
+ * PDF P1 「引落上位 → 資金移動・振込・現金 → 入金下位」
+ */
+function paymentPriority(tx: {
+  amount: bigint
+  paymentMethod: string | null
+  type: string
+}): number {
+  if (tx.paymentMethod === "DIRECT_DEBIT") return 0
+  if (
+    tx.type === "TRANSFER" ||
+    tx.paymentMethod === "BANK_TRANSFER" ||
+    tx.paymentMethod === "CASH_WITHDRAWAL"
+  ) {
+    return 1
+  }
+  if (tx.amount > BigInt(0)) return 2
+  return 1
+}
+
+/**
  * MonthlyBalance レコードがない月の月初残高を、
  * 直近の MonthlyBalance.closingBalance + 間の月の取引合計から算出する。
  */
@@ -158,6 +179,19 @@ export async function getCashFlowTable(
         },
       },
     },
+  })
+
+  // 同日同時ルール: 同一日付内では PaymentMethod 優先度で並べ替える。
+  // displayOrder が手動設定されている取引（>0）はその順序を尊重し、
+  // 同じ displayOrder グループ内のみルール適用する。
+  transactions.sort((a, b) => {
+    const dateA = (a.transactionDate ?? a.scheduledDate)?.getTime() ?? 0
+    const dateB = (b.transactionDate ?? b.scheduledDate)?.getTime() ?? 0
+    if (dateA !== dateB) return dateA - dateB
+    if (a.displayOrder !== b.displayOrder) return a.displayOrder - b.displayOrder
+    const prioDiff = paymentPriority(a) - paymentPriority(b)
+    if (prioDiff !== 0) return prioDiff
+    return a.createdAt.getTime() - b.createdAt.getTime()
   })
 
   const [monthlyBalance, checkpoints] = await Promise.all([

@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
@@ -19,6 +20,61 @@ import {
   markLoanSchedulePaid,
 } from "@/app/actions/loans"
 import { formatYen, formatDate } from "@/lib/format"
+
+function printLoanContract(loan: LoanDetail, partnerName: string) {
+  const win = window.open("", "_blank", "width=900,height=700")
+  if (!win) return
+  const rows = loan.schedules
+    .map(
+      (s) => `<tr${s.isPaid ? ' style="opacity:.6"' : ""}>
+        <td style="text-align:center">${s.paymentNumber}</td>
+        <td>${formatDate(s.dueDate)}</td>
+        <td style="text-align:right">${formatYen(Number(s.principalAmount))}</td>
+        <td style="text-align:right">${formatYen(Number(s.interestAmount))}</td>
+        <td style="text-align:right">${formatYen(Number(s.totalAmount))}</td>
+        <td style="text-align:right">${formatYen(Number(s.remainingBalance))}</td>
+        <td style="text-align:center">${s.isPaid ? "支払済" : "未払"}</td>
+      </tr>`
+    )
+    .join("")
+  const html = `<!doctype html>
+<html lang="ja"><head><meta charset="utf-8" />
+<title>${loan.contractName} - 借入契約書</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans','Yu Gothic',sans-serif;color:#111;margin:24px;}
+  h1{font-size:20px;margin:0 0 4px;}
+  .meta{display:grid;grid-template-columns:repeat(4,1fr);gap:8px 16px;margin:16px 0;font-size:12px;}
+  .meta .label{color:#666;font-size:11px;}
+  table{width:100%;border-collapse:collapse;font-size:11px;margin-top:8px;}
+  th,td{border:1px solid #ccc;padding:4px 6px;}
+  th{background:#f5f5f5;}
+  @media print { @page { size: A4; margin: 12mm; } }
+</style></head><body>
+<h1>${loan.contractName}</h1>
+<div style="color:#666;font-size:12px">借入契約書（印刷ビュー）</div>
+<div class="meta">
+  <div><div class="label">借入先</div>${partnerName}</div>
+  <div><div class="label">借入額</div>${formatYen(Number(loan.principalAmount))}</div>
+  <div><div class="label">残高</div>${formatYen(Number(loan.remainingBalance))}</div>
+  <div><div class="label">ステータス</div>${loan.status}</div>
+  <div><div class="label">実行日</div>${formatDate(loan.executionDate)}</div>
+  <div><div class="label">返済開始日</div>${formatDate(loan.repaymentStartDate)}</div>
+  <div><div class="label">返済方法</div>${loan.repaymentMethod}</div>
+  <div><div class="label">返済頻度</div>${loan.repaymentFrequency}</div>
+  <div><div class="label">返済日</div>${loan.repaymentDay ?? "-"}</div>
+  <div><div class="label">回数</div>${loan.totalPayments ?? "-"}</div>
+  <div><div class="label">金利</div>${loan.interestRate}% (${loan.interestType})</div>
+</div>
+<h2 style="font-size:14px;margin:16px 0 4px">返済スケジュール</h2>
+<table>
+<thead><tr><th>回</th><th>期日</th><th>元金</th><th>利息</th><th>合計</th><th>残高</th><th>状態</th></tr></thead>
+<tbody>${rows}</tbody>
+</table>
+<script>window.onload=()=>setTimeout(()=>window.print(),100);</script>
+</body></html>`
+  win.document.write(html)
+  win.document.close()
+}
 
 type PartnerOption = {
   id: string
@@ -35,6 +91,7 @@ type LoanItem = {
   interestRate: string
   interestType: string
   status: string
+  isGuaranteeAssociation: boolean
   _count: { schedules: number }
 }
 
@@ -105,6 +162,7 @@ const initialFormState = {
   totalPayments: "",
   interestType: "FIXED",
   interestRate: "",
+  isGuaranteeAssociation: false,
 }
 
 export default function LoansPage() {
@@ -175,6 +233,7 @@ export default function LoansPage() {
         totalPayments: parseInt(form.totalPayments),
         interestType: form.interestType,
         interestRate: form.interestRate,
+        isGuaranteeAssociation: form.isGuaranteeAssociation,
       })
       resetForm()
       loadLoans(selectedCompany.id)
@@ -355,6 +414,16 @@ export default function LoansPage() {
                 />
               </div>
             </div>
+            <div className="flex items-center gap-2 pt-2">
+              <Checkbox
+                id="isGuaranteeAssociation"
+                checked={form.isGuaranteeAssociation}
+                onCheckedChange={(c) => setForm((p) => ({ ...p, isGuaranteeAssociation: !!c }))}
+              />
+              <Label htmlFor="isGuaranteeAssociation" className="cursor-pointer">
+                保証協会あり
+              </Label>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={resetForm}>キャンセル</Button>
@@ -379,8 +448,18 @@ export default function LoansPage() {
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>
-              {selectedLoan?.contractName || "借入契約詳細"}
+            <DialogTitle className="flex items-center justify-between">
+              <span>{selectedLoan?.contractName || "借入契約詳細"}</span>
+              {selectedLoan && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mr-8"
+                  onClick={() => printLoanContract(selectedLoan, getPartnerName(selectedLoan.partnerId))}
+                >
+                  印刷 / PDF
+                </Button>
+              )}
             </DialogTitle>
           </DialogHeader>
           {selectedLoan && (
@@ -497,6 +576,7 @@ export default function LoansPage() {
                   <TableHead>実行日</TableHead>
                   <TableHead>返済方法</TableHead>
                   <TableHead>金利</TableHead>
+                  <TableHead>保証協会</TableHead>
                   <TableHead>ステータス</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
@@ -511,6 +591,13 @@ export default function LoansPage() {
                     <TableCell>{REPAYMENT_METHOD_LABELS[loan.repaymentMethod] || loan.repaymentMethod}</TableCell>
                     <TableCell>
                       {loan.interestRate}%（{loan.interestType === "FIXED" ? "固定" : "変動"}）
+                    </TableCell>
+                    <TableCell>
+                      {loan.isGuaranteeAssociation ? (
+                        <Badge variant="secondary">あり</Badge>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">—</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Badge variant={STATUS_VARIANTS[loan.status] || "outline"}>

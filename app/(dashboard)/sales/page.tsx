@@ -10,7 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
-import { useCompany } from "@/contexts/company-context"
+import { useCompany, isAllCompanies } from "@/contexts/company-context"
+import { AllCompaniesBanner } from "@/components/all-companies-banner"
 import { getAccounts } from "@/app/actions/accounts"
 import { getPartners } from "@/app/actions/partners"
 import { getCategories } from "@/app/actions/categories"
@@ -27,6 +28,7 @@ import {
 import { formatYen, getCurrentMonth, formatDate } from "@/lib/format"
 import { checkMonthClosed } from "@/app/actions/cashflow-table"
 import { DeductionDetailsPanel } from "@/components/deduction-details-panel"
+import TransactionExcelImport from "@/components/transaction-excel-import"
 
 type Account = { id: string; bankName: string | null; branchName: string | null; accountNumber: string | null }
 type Partner = { id: string; name: string; type: string; tagKey: string; isActive: boolean; defaults: { midId: string; subId: string | null }[] }
@@ -102,7 +104,7 @@ export default function SalesPage() {
   }
 
   const loadData = useCallback(async () => {
-    if (!selectedCompany) return
+    if (!selectedCompany || isAllCompanies(selectedCompany)) return
     setLoading(true)
     try {
       const [accs, parts, cats, txnResult, closed] = await Promise.all([
@@ -322,6 +324,18 @@ export default function SalesPage() {
     return invoiceAmt - paidAmt
   }
 
+  if (isAllCompanies(selectedCompany)) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">売上入力</h1>
+          <p className="text-muted-foreground">全社合算モード</p>
+        </div>
+        <AllCompaniesBanner feature="売上入力" />
+      </div>
+    )
+  }
+
   if (!selectedCompany) {
     return (
       <div className="space-y-6">
@@ -421,7 +435,17 @@ export default function SalesPage() {
           <h1 className="text-2xl font-bold tracking-tight">売上入力</h1>
           <p className="text-muted-foreground">売上（請求＋入金）の入力・管理を行います</p>
         </div>
-        <Button onClick={openInvoiceDialog}>請求を追加</Button>
+        <div className="flex items-center gap-2">
+          {selectedCompany && (
+            <TransactionExcelImport
+              mode="SALES"
+              companyId={selectedCompany.id}
+              accounts={accounts}
+              onComplete={loadData}
+            />
+          )}
+          <Button onClick={openInvoiceDialog}>請求を追加</Button>
+        </div>
       </div>
 
       <Card>

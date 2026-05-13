@@ -186,6 +186,7 @@ export async function createLoan(data: {
   principalAdjust?: string
   holidayAdjust?: string
   completionDate?: string
+  isGuaranteeAssociation?: boolean
 }) {
   await requireSession()
 
@@ -231,6 +232,7 @@ export async function createLoan(data: {
       holidayAdjust: data.holidayAdjust ?? "PREV_BUSINESS",
       completionDate: data.completionDate ? new Date(data.completionDate) : undefined,
       remainingBalance: principalAmount,
+      isGuaranteeAssociation: data.isGuaranteeAssociation ?? false,
       status: "ACTIVE",
       schedules: {
         create: scheduleItems.map((s) => ({
@@ -276,6 +278,7 @@ export async function updateLoan(
     holidayAdjust?: string
     completionDate?: string | null
     status?: string
+    isGuaranteeAssociation?: boolean
   }
 ) {
   await requireSession()
@@ -304,6 +307,7 @@ export async function updateLoan(
   if (data.holidayAdjust !== undefined) updateData.holidayAdjust = data.holidayAdjust
   if (data.completionDate !== undefined) updateData.completionDate = data.completionDate ? new Date(data.completionDate) : null
   if (data.status !== undefined) updateData.status = data.status
+  if (data.isGuaranteeAssociation !== undefined) updateData.isGuaranteeAssociation = data.isGuaranteeAssociation
 
   const result = await prisma.loanContract.update({
     where: { id },

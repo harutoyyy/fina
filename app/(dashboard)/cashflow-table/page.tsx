@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useRouter } from "next/navigation"
-import { useCompany } from "@/contexts/company-context"
+import { useCompany, isAllCompanies } from "@/contexts/company-context"
+import { AllCompaniesBanner } from "@/components/all-companies-banner"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -336,13 +337,13 @@ export default function CashFlowTablePage() {
   }, [])
 
   useEffect(() => {
-    if (selectedCompany) {
+    if (selectedCompany && !isAllCompanies(selectedCompany)) {
       loadAccounts(selectedCompany.id)
     }
   }, [selectedCompany, loadAccounts])
 
   useEffect(() => {
-    if (selectedCompany && selectedAccountId && selectedMonth) {
+    if (selectedCompany && !isAllCompanies(selectedCompany) && selectedAccountId && selectedMonth) {
       loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
     }
   }, [selectedCompany, selectedAccountId, selectedMonth, loadTableData])
@@ -715,6 +716,18 @@ export default function CashFlowTablePage() {
   }
 
   const isClosed = monthCloseStatus?.isClosed === true
+
+  if (isAllCompanies(selectedCompany)) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">資金繰り表</h1>
+          <p className="text-muted-foreground">全社合算モード</p>
+        </div>
+        <AllCompaniesBanner feature="資金繰り表" />
+      </div>
+    )
+  }
 
   if (!selectedCompany) {
     return (

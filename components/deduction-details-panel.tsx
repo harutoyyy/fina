@@ -85,7 +85,17 @@ export function DeductionDetailsPanel({
             }))
           )
         } else {
-          setRows([{ ...emptyRow }])
+          // PDF要件: 新規取引で控除内訳が無い場合は前月項目を自動プリロード（金額は0）
+          try {
+            const prev = await copyPreviousDeductions(transactionId, companyId)
+            if (prev.found && prev.deductions.length > 0) {
+              setRows(prev.deductions)
+            } else {
+              setRows([{ ...emptyRow }])
+            }
+          } catch {
+            setRows([{ ...emptyRow }])
+          }
         }
       } catch (e) {
         console.error("Failed to load deduction data:", e)
@@ -94,7 +104,7 @@ export function DeductionDetailsPanel({
       }
     }
     load()
-  }, [open, transactionId, forType])
+  }, [open, transactionId, forType, companyId])
 
   const updateRow = (index: number, field: keyof DeductionRow, value: string) => {
     setRows((prev) => {

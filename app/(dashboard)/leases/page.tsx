@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { getLeases, createLease, updateLease, deleteLease, markLeaseSchedulePaid, regenerateLeaseSchedule } from "@/app/actions/leases"
+import { getLeases, createLease, updateLease, deleteLease, markLeaseSchedulePaid, regenerateLeaseSchedule, getVehicleLeaseMatrix } from "@/app/actions/leases"
 import { getAccounts } from "@/app/actions/accounts"
 import { getPartners } from "@/app/actions/partners"
 import { getCategories } from "@/app/actions/categories"
@@ -66,8 +66,23 @@ type LeaseItem = {
   midId: string | null
   subId: string | null
   status: string
+  assetCategory: string
+  vehicleModel: string | null
+  vehicleNumber: string | null
   createdAt: string
   schedules: LeaseScheduleItem[]
+}
+
+const ASSET_CATEGORY_LABELS: Record<string, string> = {
+  REPRESENTATIVE: "代表",
+  VEHICLE: "車",
+  OTHER: "その他",
+}
+
+const ASSET_CATEGORY_VARIANTS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+  REPRESENTATIVE: "default",
+  VEHICLE: "secondary",
+  OTHER: "outline",
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -93,6 +108,9 @@ const initialFormState = {
   accountId: "",
   midId: "",
   subId: "",
+  assetCategory: "OTHER",
+  vehicleModel: "",
+  vehicleNumber: "",
 }
 
 export default function LeasesPage() {
@@ -107,7 +125,9 @@ export default function LeasesPage() {
   const [form, setForm] = useState(initialFormState)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [vehicleMatrixOpen, setVehicleMatrixOpen] = useState(false)
   const [detailLease, setDetailLease] = useState<LeaseItem | null>(null)
+  const [categoryFilter, setCategoryFilter] = useState<string>("ALL")
 
   const expenseMidCategories = categories
     .filter((m) => m.direction === "EXPENSE")
@@ -176,6 +196,9 @@ export default function LeasesPage() {
       accountId: lease.accountId || "",
       midId: lease.midId || "",
       subId: lease.subId || "",
+      assetCategory: lease.assetCategory || "OTHER",
+      vehicleModel: lease.vehicleModel || "",
+      vehicleNumber: lease.vehicleNumber || "",
     })
     setEditingId(lease.id)
     setDialogOpen(true)
@@ -197,6 +220,9 @@ export default function LeasesPage() {
           accountId: form.accountId || null,
           midId: form.midId || null,
           subId: form.subId || null,
+          assetCategory: form.assetCategory,
+          vehicleModel: form.assetCategory === "VEHICLE" ? form.vehicleModel || null : null,
+          vehicleNumber: form.assetCategory === "VEHICLE" ? form.vehicleNumber || null : null,
         })
       } else {
         await createLease({
@@ -211,6 +237,9 @@ export default function LeasesPage() {
           accountId: form.accountId || undefined,
           midId: form.midId || undefined,
           subId: form.subId || undefined,
+          assetCategory: form.assetCategory,
+          vehicleModel: form.assetCategory === "VEHICLE" ? form.vehicleModel || undefined : undefined,
+          vehicleNumber: form.assetCategory === "VEHICLE" ? form.vehicleNumber || undefined : undefined,
         })
       }
       resetForm()
@@ -265,8 +294,19 @@ export default function LeasesPage() {
           <h1 className="text-2xl font-bold tracking-tight">リース管理</h1>
           <p className="text-muted-foreground">{selectedCompany.name} のリース契約を管理します</p>
         </div>
-        <Button onClick={openNewForm}>新規契約</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setVehicleMatrixOpen(true)}>
+            車両支払シミュレーション
+          </Button>
+          <Button onClick={openNewForm}>新規契約</Button>
+        </div>
       </div>
+
+      <VehicleMatrixDialog
+        open={vehicleMatrixOpen}
+        onOpenChange={setVehicleMatrixOpen}
+        companyId={selectedCompany.id}
+      />
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
@@ -352,6 +392,39 @@ export default function LeasesPage() {
                 </Select>
               </div>
             </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>資産分類</Label>
+                <Select value={form.assetCategory} onValueChange={(v) => setForm((p) => ({ ...p, assetCategory: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="REPRESENTATIVE">代表</SelectItem>
+                    <SelectItem value="VEHICLE">車</SelectItem>
+                    <SelectItem value="OTHER">その他</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {form.assetCategory === "VEHICLE" && (
+                <>
+                  <div className="space-y-2">
+                    <Label>車種</Label>
+                    <Input
+                      placeholder="例: ハイエース"
+                      value={form.vehicleModel}
+                      onChange={(e) => setForm((p) => ({ ...p, vehicleModel: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>車両番号</Label>
+                    <Input
+                      placeholder="例: 練馬 500 あ 12-34"
+                      value={form.vehicleNumber}
+                      onChange={(e) => setForm((p) => ({ ...p, vehicleNumber: e.target.value }))}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={resetForm}>キャンセル</Button>
@@ -364,7 +437,23 @@ export default function LeasesPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>リース契約一覧</CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle>リース契約一覧</CardTitle>
+            <div className="flex items-center gap-2">
+              <Label className="text-sm">分類フィルタ:</Label>
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-40 h-8">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">すべて</SelectItem>
+                  <SelectItem value="REPRESENTATIVE">代表</SelectItem>
+                  <SelectItem value="VEHICLE">車</SelectItem>
+                  <SelectItem value="OTHER">その他</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -376,6 +465,7 @@ export default function LeasesPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>契約名</TableHead>
+                  <TableHead>分類</TableHead>
                   <TableHead>相手先</TableHead>
                   <TableHead className="text-right">月額</TableHead>
                   <TableHead>開始日</TableHead>
@@ -385,9 +475,23 @@ export default function LeasesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {leases.map((lease) => (
+                {leases
+                  .filter((lease) => categoryFilter === "ALL" || lease.assetCategory === categoryFilter)
+                  .map((lease) => (
                   <TableRow key={lease.id} className={detailLease?.id === lease.id ? "bg-muted/50" : ""}>
-                    <TableCell className="font-medium">{lease.contractName}</TableCell>
+                    <TableCell className="font-medium">
+                      <div>{lease.contractName}</div>
+                      {lease.assetCategory === "VEHICLE" && (lease.vehicleModel || lease.vehicleNumber) && (
+                        <div className="text-xs text-muted-foreground">
+                          {[lease.vehicleModel, lease.vehicleNumber].filter(Boolean).join(" / ")}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={ASSET_CATEGORY_VARIANTS[lease.assetCategory] || "outline"}>
+                        {ASSET_CATEGORY_LABELS[lease.assetCategory] || lease.assetCategory}
+                      </Badge>
+                    </TableCell>
                     <TableCell>{getPartnerName(lease.partnerId)}</TableCell>
                     <TableCell className="text-right font-mono">{formatYen(Number(lease.monthlyAmount))}</TableCell>
                     <TableCell>{formatDate(lease.startDate)}</TableCell>
@@ -481,5 +585,142 @@ export default function LeasesPage() {
         </Card>
       )}
     </div>
+  )
+}
+
+// ============================================================
+// 車両支払シミュレーションマトリクス（PDF P9）
+// ============================================================
+
+type VehicleMatrix = Awaited<ReturnType<typeof getVehicleLeaseMatrix>>
+
+function VehicleMatrixDialog({
+  open,
+  onOpenChange,
+  companyId,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  companyId: string
+}) {
+  const today = new Date()
+  const ymStr = (y: number, m: number) => `${y}-${String(m).padStart(2, "0")}`
+  const [fromMonth, setFromMonth] = useState(ymStr(today.getFullYear(), today.getMonth() + 1))
+  const [toMonth, setToMonth] = useState(ymStr(today.getFullYear() + 1, today.getMonth() + 1))
+  const [data, setData] = useState<VehicleMatrix | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!open) return
+    setLoading(true)
+    try {
+      const res = await getVehicleLeaseMatrix({ companyId, fromMonth, toMonth })
+      setData(res)
+    } finally {
+      setLoading(false)
+    }
+  }, [open, companyId, fromMonth, toMonth])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-[95vw] w-[1400px]">
+        <DialogHeader>
+          <DialogTitle>車両支払シミュレーション</DialogTitle>
+        </DialogHeader>
+        <div className="flex items-end gap-3 mb-3">
+          <div>
+            <Label className="text-xs">開始月</Label>
+            <Input
+              type="month"
+              value={fromMonth}
+              onChange={(e) => setFromMonth(e.target.value)}
+              className="w-36"
+            />
+          </div>
+          <div>
+            <Label className="text-xs">終了月</Label>
+            <Input
+              type="month"
+              value={toMonth}
+              onChange={(e) => setToMonth(e.target.value)}
+              className="w-36"
+            />
+          </div>
+        </div>
+        <div className="overflow-auto max-h-[70vh] border rounded">
+          {loading ? (
+            <p className="text-muted-foreground text-center py-8">読み込み中...</p>
+          ) : !data || data.rows.length === 0 ? (
+            <p className="text-muted-foreground text-center py-8">
+              車両分類のリース契約がありません
+            </p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="bg-muted sticky top-0 z-10">
+                <tr>
+                  <th className="text-left p-2 sticky left-0 bg-muted">契約名</th>
+                  <th className="text-left p-2">車種</th>
+                  <th className="text-left p-2">車両番号</th>
+                  <th className="text-right p-2">月額</th>
+                  {data.months.map((m) => (
+                    <th key={m} className="text-right p-2 whitespace-nowrap">
+                      {m}
+                    </th>
+                  ))}
+                  <th className="text-right p-2 bg-amber-50">合計</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.rows.map((r) => (
+                  <tr key={r.id} className="border-t">
+                    <td className="p-2 sticky left-0 bg-background font-medium">
+                      {r.contractName}
+                    </td>
+                    <td className="p-2">{r.vehicleModel}</td>
+                    <td className="p-2">{r.vehicleNumber}</td>
+                    <td className="p-2 text-right font-mono">
+                      {formatYen(Number(r.monthlyAmount))}
+                    </td>
+                    {r.cells.map((c, i) => (
+                      <td
+                        key={i}
+                        className="p-2 text-right font-mono whitespace-nowrap"
+                      >
+                        {c ? formatYen(Number(c)) : "-"}
+                      </td>
+                    ))}
+                    <td className="p-2 text-right font-mono bg-amber-50">
+                      {formatYen(Number(r.total))}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="border-t font-bold bg-muted/50">
+                  <td className="p-2 sticky left-0 bg-muted/50" colSpan={4}>
+                    月合計
+                  </td>
+                  {data.monthTotals.map((t, i) => (
+                    <td key={i} className="p-2 text-right font-mono">
+                      {formatYen(Number(t))}
+                    </td>
+                  ))}
+                  <td className="p-2 text-right font-mono bg-amber-100">
+                    {formatYen(
+                      data.monthTotals.reduce(
+                        (acc, t) => acc + Number(t),
+                        0
+                      )
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }

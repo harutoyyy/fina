@@ -34,3 +34,12 @@ next-env.d.ts
 /playwright-report/
 /test-results/
 e2e/.auth/
+
+# Local-only files (per-user assets, lock files, aliases)
+.~lock.*#
+*.xlsx
+*.pdf
+経理システムのエイリアス
+.claude/worktrees/
+.claude/settings.local.json
+.claude/plans/

@@ -122,7 +122,8 @@ model Company {
   name            String    // 会社名
   nameKana        String?   // 会社名フリガナ
   shortName       String?   // 略称（帳票表示名）
-  industryType    String?   // 業種
+  industryType    String?   // 業種（旧フィールド・互換のため残存。新規入力は industryMasterId を使用）
+  industryMasterId String?  // 業種マスタID（PDF P10-3）
   representativeTitle String? // 代表者役職
   representativeName  String? // 代表者氏名
   postalCode      String?   // 郵便番号
@@ -157,9 +158,27 @@ model Company {
   recurringTemplates RecurringTemplate[]
   monthCloses     MonthClose[]
   reconciliationCheckpoints ReconciliationCheckpoint[]
+  industryMaster  IndustryMaster? @relation(fields: [industryMasterId], references: [id])
 
   @@schema("fina")
   @@map("companies_fina")
+}
+
+// 業種マスタ（PDF P10-3 建設/広告/その他、追加可）
+model IndustryMaster {
+  id           String   @id @default(cuid())
+  name         String   @unique // 業種名（建設/広告/その他 等）
+  code         String?  @unique // 任意の短縮コード
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  companies    Company[]
+
+  @@schema("fina")
+  @@map("industry_masters_fina")
 }
 
 // ============================================================
@@ -846,6 +865,8 @@ model LoanContract {
   interestHistory Json?   // [{effectiveDate, rate}]
   remainingBalance BigInt @default(0) // 残高
   status          String  @default("ACTIVE") // "ACTIVE","COMPLETED","CANCELLED"
+  // PDF P8: 保証協会有無フラグ
+  isGuaranteeAssociation Boolean @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -896,6 +917,10 @@ model LeaseContract {
   midId           String? // 中項目
   subId           String? // 小項目
   status          String  @default("ACTIVE")
+  // PDF P9: 車種分類（代表/車/その他）
+  assetCategory   String  @default("OTHER") // "REPRESENTATIVE","VEHICLE","OTHER"
+  vehicleModel    String? // 車種（VEHICLE時のみ）
+  vehicleNumber   String? // 車両番号
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -1105,4 +1130,173 @@ model ReconciliationCheckpoint {
   @@unique([accountId, yearMonth, checkpointDate])
   @@schema("fina")
   @@map("reconciliation_checkpoints_fina")
+}
+
+// ============================================================
+// 22. 納税予定表（PDF P9）
+// 法人税/消費税の確定・中間納税予定を管理。
+// 中間納税は前年確定額の閾値（20万/48万/400万）から自動算出。
+// ============================================================
+
+model TaxPaymentSchedule {
+  id                  String   @id @default(cuid())
+  companyId           String
+  taxType             String   // "CORPORATE","CONSUMPTION","RESIDENT","BUSINESS","FIXED_ASSET","OTHER"
+  fiscalYear          Int      // 対象事業年度（例: 2025）
+  periodLabel         String   // "確定","中間1","中間2","中間3","中間4"
+  dueDate             DateTime // 納付期限
+  scheduledAmount     BigInt   @default(0) // 予定額
+  actualAmount        BigInt?  // 実納付額
+  basisAmount         BigInt?  // 算定基礎額（前年確定額）
+  calculationMethod   String?  // "FIXED_ANNUAL","INTERIM_HALF","INTERIM_QUARTERLY","INTERIM_MONTHLY","MANUAL"
+  isPaid              Boolean  @default(false)
+  paidDate            DateTime?
+  transactionId       String?  // 紐づく取引ID
+  accountId           String?  // 引落口座
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([companyId, fiscalYear, taxType])
+  @@index([dueDate])
+  @@schema("fina")
+  @@map("tax_payment_schedules_fina")
+}
+
+// ============================================================
+// 23. クレジットカードマスタ & 明細インポート（PDF P9）
+// ============================================================
+
+model CreditCard {
+  id              String   @id @default(cuid())
+  companyId       String
+  cardName        String   // カード名（例: 法人VISA, 楽天カード）
+  cardBrand       String?  // "VISA","JCB","MASTER","AMEX","DINERS"
+  cardLast4       String?  // 末尾4桁
+  holderName      String?  // 名義人
+  paymentAccountId String? // 引落口座
+  closingDay      Int?     // 締日
+  paymentDay      Int?     // 支払日
+  isActive        Boolean  @default(true)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  statements      CardStatement[]
+
+  @@schema("fina")
+  @@map("credit_cards_fina")
+}
+
+model CardStatement {
+  id              String   @id @default(cuid())
+  cardId          String
+  statementMonth  String   // "YYYY-MM"（引落月基準）
+  statementDate   DateTime // 利用日
+  storeName       String   // 利用店名
+  amount          BigInt   // 利用金額（円）
+  category        String?  // 任意のカテゴリ（交際費/消耗品 等）
+  midId           String?  // 勘定科目（中項目）
+  subId           String?  // 補助科目（小項目）
+  partnerId       String?  // 取引先
+  summary         String?  // 摘要
+  isPosted        Boolean  @default(false) // 取引登録済みフラグ
+  transactionId   String?  // 紐づく Transaction.id
+  importBatchId   String?  // 取込バッチID
+  rowHash         String?  // 重複排除用ハッシュ
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  card            CreditCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+
+  @@index([cardId, statementMonth])
+  @@index([rowHash])
+  @@schema("fina")
+  @@map("card_statements_fina")
+}
+
+// ============================================================
+// 24. DX連携代替: Excel/CSV取込バッチ（PDF P3 売上・原価・給与）
+// ============================================================
+
+model ImportBatch {
+  id              String   @id @default(cuid())
+  companyId       String
+  batchType       String   // "SALES","COST","CARD","SALARY"
+  sourceName      String?  // ファイル名
+  sourceFormat    String?  // "EXCEL","CSV","DX_API"
+  yearMonth       String?  // 対象月
+  importedBy      String?  // ユーザーID
+  totalRows       Int      @default(0)
+  appliedRows     Int      @default(0)
+  skippedRows     Int      @default(0)
+  status          String   @default("DRAFT") // "DRAFT","APPLIED","CANCELLED"
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([companyId, batchType, yearMonth])
+  @@schema("fina")
+  @@map("import_batches_fina")
+}
+
+// ============================================================
+// 25. 会社グループ（PDF P1 ダッシュボードタイル & P7 グループ間入力）
+// ============================================================
+
+model CompanyGroup {
+  id              String   @id @default(cuid())
+  name            String   @unique // 例: "Aグループ","エグループ"
+  shortName       String?  // 略称
+  description     String?
+  colorCode       String?  // タイル背景色（#RRGGBB）
+  displayOrder    Int      @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  members         CompanyGroupMember[]
+
+  @@schema("fina")
+  @@map("company_groups_fina")
+}
+
+// 1社が複数グループに所属可能（例: A工業がAグループにも全社サマリにも入る）
+model CompanyGroupMember {
+  id              String   @id @default(cuid())
+  groupId         String
+  companyId       String
+  role            String   @default("MEMBER") // "PARENT","MEMBER"
+  displayOrder    Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  group           CompanyGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, companyId])
+  @@index([companyId])
+  @@schema("fina")
+  @@map("company_group_members_fina")
+}
+
+// ============================================================
+// Phase 3-D: 売上項目メタマスタ
+// PDF P10: 売上項目（◯◯売上、対象会社チェック）
+// ============================================================
+
+model SalesItemMaster {
+  id              String   @id @default(cuid())
+  name            String   // 売上項目名（例: 工事売上、地代収入、雑収入）
+  shortName       String?
+  description     String?
+  // 対象会社IDのカンマ区切り（空=全社対象）
+  applicableCompanyIds String?
+  // デフォルト分類
+  defaultClassification String? // "FIXED","VARIABLE","TEMPORARY"
+  displayOrder    Int      @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@schema("fina")
+  @@map("sales_item_masters_fina")
 }

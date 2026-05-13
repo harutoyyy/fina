@@ -1,7 +1,8 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
-import { useCompany } from "@/contexts/company-context"
+import { useCompany, isAllCompanies } from "@/contexts/company-context"
+import { AllCompaniesBanner } from "@/components/all-companies-banner"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -91,7 +92,7 @@ export default function ExpenseBoxPage() {
   const [totalPages, setTotalPages] = useState(1)
 
   const loadData = useCallback(async () => {
-    if (!selectedCompany) return
+    if (!selectedCompany || isAllCompanies(selectedCompany)) return
     setLoading(true)
     try {
       const filters: Parameters<typeof getExpenseBoxItems>[1] = {
@@ -165,6 +166,18 @@ export default function ExpenseBoxPage() {
   const isAdmin = profile?.role === "ADMIN"
   const draftCount = expenses.filter((e) => e.status === "DRAFT").length
   const readyCount = expenses.filter((e) => e.status === "READY").length
+
+  if (isAllCompanies(selectedCompany)) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">受領BOX</h1>
+          <p className="text-muted-foreground">全社合算モード</p>
+        </div>
+        <AllCompaniesBanner feature="受領BOX" />
+      </div>
+    )
+  }
 
   if (!selectedCompany) {
     return (
