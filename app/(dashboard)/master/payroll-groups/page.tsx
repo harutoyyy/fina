@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { getPayrollGroups, createPayrollGroup, updatePayrollGroup, deletePayrollGroup } from "@/app/actions/payroll"
 import { getAccounts } from "@/app/actions/accounts"
 import { Card, CardContent } from "@/components/ui/card"
@@ -183,6 +184,7 @@ export default function PayrollGroupsPage() {
           <h1 className="text-2xl font-bold tracking-tight">給与グループ管理</h1>
           <p className="text-muted-foreground">{selectedCompany.name} の給与グループを管理します</p>
         </div>
+        <CompanySwitcher />
         <Button onClick={openCreate}><Plus className="mr-2 h-4 w-4" />グループ追加</Button>
       </div>
 

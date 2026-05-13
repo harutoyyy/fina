@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { getAccounts, createAccount, updateAccount, toggleAccountActive } from "@/app/actions/accounts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -120,6 +121,7 @@ export default function AccountsPage() {
           <h1 className="text-2xl font-bold tracking-tight">銀行口座管理</h1>
           <p className="text-muted-foreground">{selectedCompany.name} の口座を管理します</p>
         </div>
+        <CompanySwitcher />
         <Button onClick={openCreate}><Plus className="mr-2 h-4 w-4" />口座追加</Button>
       </div>
 

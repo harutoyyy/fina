@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import {
   getInterGroupTransactions,
   createInterGroupTransaction,
@@ -215,6 +216,7 @@ export default function InterGroupPage() {
             支払会社で入力した取引は、受取会社側に自動で反映されます。
           </p>
         </div>
+        <CompanySwitcher />
         <div className="flex items-center gap-2">
           <Input
             type="month"

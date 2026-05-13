@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -283,6 +284,7 @@ export default function LeasesPage() {
           <h1 className="text-2xl font-bold tracking-tight">リース管理</h1>
           <p className="text-muted-foreground">会社を選択してください</p>
         </div>
+        <CompanySwitcher />
       </div>
     )
   }
@@ -294,6 +296,7 @@ export default function LeasesPage() {
           <h1 className="text-2xl font-bold tracking-tight">リース管理</h1>
           <p className="text-muted-foreground">{selectedCompany.name} のリース契約を管理します</p>
         </div>
+        <CompanySwitcher />
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setVehicleMatrixOpen(true)}>
             車両支払シミュレーション

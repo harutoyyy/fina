@@ -11,6 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { getAccounts } from "@/app/actions/accounts"
 import TransactionExcelImport from "@/components/transaction-excel-import"
 import { getPartners } from "@/app/actions/partners"
@@ -249,6 +250,7 @@ export default function CostsPage() {
           <h1 className="text-2xl font-bold tracking-tight">原価支払</h1>
           <p className="text-muted-foreground">工事原価の支払いを管理します</p>
         </div>
+        <CompanySwitcher />
         <div className="flex items-center gap-2">
           {selectedCompany && (
             <TransactionExcelImport

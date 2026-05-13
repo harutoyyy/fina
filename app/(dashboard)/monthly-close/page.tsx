@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { getAccounts } from "@/app/actions/accounts"
 import {
   getMonthCloseStatus,
@@ -201,6 +202,7 @@ export default function MonthlyClosePage() {
           <h1 className="text-2xl font-bold tracking-tight">月次処理</h1>
           <p className="text-muted-foreground">{selectedCompany.name} の月次締め・残高管理</p>
         </div>
+        <CompanySwitcher />
       </div>
 
       {loading ? (

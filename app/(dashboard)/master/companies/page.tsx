@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { getCompanies, updateCompany } from "@/app/actions/companies"
 import { getIndustries } from "@/app/actions/industries"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -101,6 +102,7 @@ export default function CompaniesPage() {
         <h1 className="text-2xl font-bold tracking-tight">会社一覧</h1>
         <p className="text-muted-foreground">グループ会社の基本情報を管理します</p>
       </div>
+        <CompanySwitcher />
 
       <Card>
         <CardHeader>

@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { getAccounts } from "@/app/actions/accounts"
 import { getFundTransfers, createFundTransfer, deleteFundTransfer } from "@/app/actions/fund-transfers"
 import { getCompanies } from "@/app/actions/companies"
@@ -173,6 +174,7 @@ export default function CashflowPage() {
           <h1 className="text-2xl font-bold tracking-tight">資金移動</h1>
           <p className="text-muted-foreground">会社を選択してください</p>
         </div>
+        <CompanySwitcher />
       </div>
     )
   }
@@ -188,6 +190,7 @@ export default function CashflowPage() {
           <h1 className="text-2xl font-bold tracking-tight">資金移動</h1>
           <p className="text-muted-foreground">口座間の資金移動を管理します</p>
         </div>
+        <CompanySwitcher />
         <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) resetForm() }}>
           <DialogTrigger asChild>
             <Button>新規資金移動</Button>

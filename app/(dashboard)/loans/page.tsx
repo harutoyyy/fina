@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -275,6 +276,7 @@ export default function LoansPage() {
           <h1 className="text-2xl font-bold tracking-tight">借入管理</h1>
           <p className="text-muted-foreground">会社を選択してください</p>
         </div>
+        <CompanySwitcher />
       </div>
     )
   }
@@ -288,6 +290,7 @@ export default function LoansPage() {
             {selectedCompany.name} の借入金を管理します
           </p>
         </div>
+        <CompanySwitcher />
         <Button onClick={() => { setForm(initialFormState); setDialogOpen(true) }}>
           新規借入契約
         </Button>
