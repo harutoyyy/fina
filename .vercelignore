@@ -1,0 +1,26 @@
+# Tests
+/e2e
+/playwright-report
+/test-results
+playwright.config.ts
+
+# Local dev tools / docs
+/.claude
+/docs
+replit.md
+.replit
+backup.sql
+*.xlsx
+*.pdf
+*.md
+!README.md
+!docs/DEPLOYMENT.md
+
+# Build artifacts
+/.next
+*.tsbuildinfo
+
+# Env files (Vercel uses dashboard-configured env vars)
+.env
+.env.local
+.env.*.local

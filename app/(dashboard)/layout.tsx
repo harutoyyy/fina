@@ -2,6 +2,8 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { AppHeader } from "@/components/app-header"
 import { CompanyProvider } from "@/contexts/company-context"
 
+export const dynamic = "force-dynamic"
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <CompanyProvider>

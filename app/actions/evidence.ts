@@ -24,7 +24,7 @@ async function getTransactionWithCompany(transactionId: string) {
 // T-10: 署名付きアップロードURLを取得
 export async function getUploadUrl(transactionId: string, fileName: string) {
   const tx = await getTransactionWithCompany(transactionId)
-  const session = await verifyCompanyAccess(tx.companyId)
+  await verifyCompanyAccess(tx.companyId)
 
   const ext = fileName.split(".").pop() || "pdf"
   const storagePath = `${tx.companyId}/${transactionId}/${Date.now()}_${crypto.randomUUID()}.${ext}`
@@ -50,7 +50,8 @@ export async function uploadEvidence(transactionId: string, data: {
   storagePath: string
 }) {
   const tx = await getTransactionWithCompany(transactionId)
-  const session = await verifyCompanyAccess(tx.companyId)
+  await verifyCompanyAccess(tx.companyId)
+  const session = await requireSession()
 
   const evidence = await prisma.evidence.create({
     data: {
