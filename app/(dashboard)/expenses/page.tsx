@@ -28,19 +28,12 @@ import {
   type TransactionWithRelations,
 } from "@/app/actions/transactions"
 import { createFundTransfer } from "@/app/actions/fund-transfers"
-import {
-  getExpenseTemplates,
-  createRecurringTemplate,
-  updateRecurringTemplate,
-  deleteRecurringTemplate,
-} from "@/app/actions/recurring"
 import { checkMonthClosed } from "@/app/actions/cashflow-table"
 import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
 import { Checkbox } from "@/components/ui/checkbox"
 import EvidencePanel from "@/components/evidence-panel"
 import { Paperclip } from "lucide-react"
 import { getCurrentUserProfile, type CurrentUserProfile } from "@/app/actions/user-profile"
-import { ExpenseInboxTab } from "@/components/expense-inbox-tab"
 
 type AccountOption = {
   id: string
@@ -72,106 +65,81 @@ type MajorCategory = {
   midCategories: MidCategory[]
 }
 
-type ExpenseTemplate = {
-  id: string
-  name: string
-  frequency: string
-  dueDayRule: string
-  transactionType: string
-  accountId: string | null
-  partnerId: string | null
-  midId: string | null
-  subId: string | null
-  amountType: string
-  fixedAmount: string | null
-  paymentMethod: string | null
-  classification: string | null
-  accountingMonthOffset: number
-  summary: string | null
-  isActive: boolean
+// 経費一覧3サブタブ（画像準拠：未確定/確認待ち/完了）
+const EXPENSE_LIST_TABS = [
+  { value: "DRAFT", label: "未確定" },
+  { value: "READY", label: "確認待ち" },
+  { value: "CONFIRMED", label: "完了" },
+] as const
+type ExpenseListTab = (typeof EXPENSE_LIST_TABS)[number]["value"]
+
+// 前月のYYYY-MMを返す
+function getPreviousMonth(month: string): string {
+  if (!month) return ""
+  const [yStr, mStr] = month.split("-")
+  const y = parseInt(yStr, 10)
+  const m = parseInt(mStr, 10)
+  if (!y || !m) return ""
+  const prev = new Date(y, m - 2, 1)
+  return `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, "0")}`
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  DRAFT: "下書き",
-  READY: "準備完了",
-  CONFIRMED: "確定済",
-  CANCELLED: "取消済",
-}
-
-const STATUS_VARIANTS: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  DRAFT: "outline",
-  READY: "secondary",
-  CONFIRMED: "default",
-  CANCELLED: "destructive",
-}
-
-const PAYMENT_METHOD_LABELS: Record<string, string> = {
-  BANK_TRANSFER: "振込",
-  DIRECT_DEBIT: "引落",
-  CASH_WITHDRAWAL: "現金",
-}
-
-const DUE_DAY_LABELS: Record<string, string> = {
-  DAY_1: "1日",
-  DAY_5: "5日",
-  DAY_10: "10日",
-  DAY_15: "15日",
-  DAY_20: "20日",
-  DAY_25: "25日",
-  DAY_27: "27日",
-  MONTH_END: "月末",
-}
-
-const AMOUNT_TYPE_LABELS: Record<string, string> = {
-  FIXED: "固定額",
-  VARIABLE: "変動",
-  MANUAL: "手動",
-}
-
-const OFFSET_LABELS: Record<number, string> = {
-  [-1]: "前月分",
-  0: "当月分",
-  1: "翌月分",
+// 「内容(summary)以外」が必須。欠落していたら「未入力有」フラグを立てる
+function hasMissingRequiredFields(
+  tx: TransactionWithRelations,
+  isOperator: boolean
+): boolean {
+  if (!tx.transactionDate) return true
+  if (!tx.scheduledDate) return true
+  if (!tx.paymentMethod) return true
+  if (!tx.accountId) return true
+  if (Number(tx.amount) <= 0) return true
+  if (!tx.partnerId && !tx.temporaryVendorName) return true
+  if (!isOperator && !tx.details[0]?.midId) return true
+  return false
 }
 
 // ============================================================
 // 臨時タブ用フォーム初期値
 // ============================================================
+type ExpensePaymentMethod = "BANK_TRANSFER" | "DIRECT_DEBIT" | "CASH_WITHDRAWAL" | "FUND_TRANSFER"
+type ExpenseClassification = "FIXED" | "VARIABLE" | "TEMPORARY" | "RECURRING"
+
+const SUMMARY_MAX_LENGTH = 30
+
 const initialTempFormState = {
+  // Row 1: 日付・種別・口座
+  scheduledDate: "",
+  transactionDate: "",
+  paymentMethod: "BANK_TRANSFER" as ExpensePaymentMethod,
   accountId: "",
+  destinationAccountId: "", // 第2口座（資金移動時のみ）
+  // Row 2: 相手先 / 内容 / 区分
   partnerId: "",
   temporaryVendorName: "",
-  transactionDate: "",
+  summary: "", // 内容（全角30文字程度）
+  classification: "TEMPORARY" as ExpenseClassification,
+  // Row 3: 金額
+  estimatedAmount: "", // 予定金額
+  amount: "", // 実金額
+  // Row 4: 科目
+  midId: "",
+  subId: "",
+  // メタ
   accountingMonth: getCurrentMonth(),
-  paymentMethod: "BANK_TRANSFER" as "BANK_TRANSFER" | "DIRECT_DEBIT" | "CASH_WITHDRAWAL",
-  amount: "",
-  midId: "",
-  subId: "",
-  summary: "",
-}
-
-// ============================================================
-// テンプレート用フォーム初期値
-// ============================================================
-const initialTemplateFormState = {
-  name: "",
-  partnerId: "",
-  midId: "",
-  subId: "",
-  dueDayRule: "DAY_25",
-  accountingMonthOffset: 0,
-  paymentMethod: "DIRECT_DEBIT" as string,
-  amountType: "VARIABLE" as string,
-  fixedAmount: "",
-  accountId: "",
-  summary: "",
-  isActive: true,
+  // Row 5: 振込先情報（振込時のみ）
+  bankCode: "",
+  bankName: "",
+  branchCode: "",
+  branchName: "",
+  destAccountType: "ORDINARY" as "ORDINARY" | "CURRENT",
+  destAccountNumber: "",
+  destAccountHolder: "",
 }
 
 export default function ExpensesPage() {
   const searchParams = useSearchParams()
   const { selectedCompany } = useCompany()
-  const [activeTab, setActiveTab] = useState("FIXED")
   const [accounts, setAccounts] = useState<AccountOption[]>([])
   const [partners, setPartners] = useState<PartnerOption[]>([])
   const [categories, setCategories] = useState<MajorCategory[]>([])
@@ -179,20 +147,13 @@ export default function ExpensesPage() {
   const isAdmin = userProfile?.role === "ADMIN"
   const isOperator = userProfile?.role === "OPERATOR"
 
-  // テンプレート（固定/変動）
-  const [templates, setTemplates] = useState<ExpenseTemplate[]>([])
-  const [templateForm, setTemplateForm] = useState(initialTemplateFormState)
-  const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null)
-  const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
-  const [templateSubmitting, setTemplateSubmitting] = useState(false)
-
-  // 臨時タブ
+  // 経費一覧（DRAFT/READY/CONFIRMED の3タブで切替）
   const [transactions, setTransactions] = useState<TransactionWithRelations[]>([])
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [filterMonth, setFilterMonth] = useState(getCurrentMonth())
-  const [filterStatus, setFilterStatus] = useState<string>("UNCONFIRMED")
-  const [showConfirmed, setShowConfirmed] = useState(false)
+  const [listSubTab, setListSubTab] = useState<ExpenseListTab>("DRAFT")
+  const [previousMonthTemplateIds, setPreviousMonthTemplateIds] = useState<Set<string>>(new Set())
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchLoading, setBatchLoading] = useState(false)
   const [tempForm, setTempForm] = useState(initialTempFormState)
@@ -221,13 +182,6 @@ export default function ExpensesPage() {
   const selectedTempMid = expenseMidCategories.find((m) => m.id === tempForm.midId)
   const tempSubCategories = selectedTempMid?.subCategories.filter((s) => s.isActive) || []
 
-  // テンプレートフォーム用
-  const selectedTemplateMid = expenseMidCategories.find((m) => m.id === templateForm.midId)
-  const templateSubCategories = selectedTemplateMid?.subCategories.filter((s) => s.isActive) || []
-
-  // フィルタされたテンプレート
-  const filteredTemplates = templates.filter((t) => t.classification === activeTab)
-
   // ============================================================
   // データ読み込み
   // ============================================================
@@ -254,47 +208,33 @@ export default function ExpensesPage() {
     setCategories(cats as MajorCategory[])
   }, [])
 
-  const loadTemplates = useCallback(async (companyId: string) => {
-    const data = await getExpenseTemplates(companyId)
-    setTemplates(data as ExpenseTemplate[])
-  }, [])
-
   const loadTransactions = useCallback(async (companyId: string) => {
     setLoading(true)
     try {
-      // UNCONFIRMED = DRAFT + READY, ALL = 全ステータス, or specific status
-      let statusFilter: "DRAFT" | "READY" | "CONFIRMED" | "CANCELLED" | undefined
-      if (filterStatus === "UNCONFIRMED") {
-        statusFilter = undefined // fetch all, then client-side filter
-      } else if (filterStatus === "ALL") {
-        statusFilter = undefined
-      } else {
-        statusFilter = filterStatus as "DRAFT" | "READY" | "CONFIRMED" | "CANCELLED"
-      }
-      const [result, closed] = await Promise.all([
+      // 経費一覧サブタブ → ステータスマップ
+      const statusFilter = listSubTab as "DRAFT" | "READY" | "CONFIRMED"
+      const previousMonth = getPreviousMonth(filterMonth)
+      const [result, closed, prevResult] = await Promise.all([
+        // 当月分: 各ステータス1つだけ取得
         getTransactions(companyId, "EXPENSE", filterMonth || undefined, statusFilter),
         filterMonth ? checkMonthClosed(companyId, filterMonth) : Promise.resolve(false),
+        // 前月分: 「前月数値」フラグ判定用に取得（recurringTemplateId比較のみに使用）
+        previousMonth
+          ? getTransactions(companyId, "EXPENSE", previousMonth)
+          : Promise.resolve({ data: [] as TransactionWithRelations[], total: 0 }),
       ])
       let filtered = result.data.filter((t) => t.classification === "TEMPORARY")
-      // 支払月BOX: scheduledDate の属する月でフィルタ（休日調整後の実行予定日ベース）
+      // 支払月BOX: scheduledDate の属する月でフィルタ
       if (filterMonth) {
         filtered = filtered.filter((t) => {
           const sd = t.scheduledDate || t.transactionDate
-          if (!sd) return true // 日付なしは表示
+          if (!sd) return true
           const d = new Date(sd)
           const sdMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
           return sdMonth === filterMonth || t.accountingMonth === filterMonth
         })
       }
-      // UNCONFIRMED: DRAFT + READY のみ（確定表示チェックで CONFIRMED も混在可能）
-      if (filterStatus === "UNCONFIRMED") {
-        if (showConfirmed) {
-          filtered = filtered.filter((t) => ["DRAFT", "READY", "CONFIRMED"].includes(t.status))
-        } else {
-          filtered = filtered.filter((t) => ["DRAFT", "READY"].includes(t.status))
-        }
-      }
-      // ソート: scheduledDate 昇順 → 取引先名順
+      // 日付順 ↓（昇順）→ 取引先名順
       filtered.sort((a, b) => {
         const dateA = a.scheduledDate || a.transactionDate || ""
         const dateB = b.scheduledDate || b.transactionDate || ""
@@ -304,26 +244,31 @@ export default function ExpensesPage() {
         const nameB = b.partner?.name || b.temporaryVendorName || ""
         return nameA.localeCompare(nameB, "ja")
       })
+      // 前月の繰返テンプレIDのSet（前月数値フラグ判定用）
+      const prevTplIds = new Set<string>()
+      for (const t of prevResult.data) {
+        if (t.recurringTemplateId) prevTplIds.add(t.recurringTemplateId)
+      }
+      setPreviousMonthTemplateIds(prevTplIds)
       setTransactions(filtered)
       setMonthClosed(closed)
       setSelectedIds(new Set())
     } finally {
       setLoading(false)
     }
-  }, [filterMonth, filterStatus, showConfirmed])
+  }, [filterMonth, listSubTab])
 
   useEffect(() => {
     if (selectedCompany) {
       loadMasterData(selectedCompany.id)
-      loadTemplates(selectedCompany.id)
     }
-  }, [selectedCompany, loadMasterData, loadTemplates])
+  }, [selectedCompany, loadMasterData])
 
   useEffect(() => {
-    if (selectedCompany && activeTab === "TEMPORARY") {
+    if (selectedCompany) {
       loadTransactions(selectedCompany.id)
     }
-  }, [selectedCompany, activeTab, loadTransactions])
+  }, [selectedCompany, loadTransactions])
 
   // 資金繰り表からの編集遷移
   useEffect(() => {
@@ -337,127 +282,13 @@ export default function ExpensesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, transactions])
 
-  // ?tab=XXX クエリ で初期タブを設定（/expense-box からのリダイレクト互換）
+  // ?tab=XXX クエリ で初期タブを設定（DRAFT/READY/CONFIRMED のみ）
   useEffect(() => {
     const tab = searchParams.get("tab")
-    if (tab && ["FIXED", "VARIABLE", "TEMPORARY", "RECEIVED"].includes(tab)) {
-      setActiveTab(tab)
+    if (tab && ["DRAFT", "READY", "CONFIRMED"].includes(tab)) {
+      setListSubTab(tab as ExpenseListTab)
     }
   }, [searchParams])
-
-  // ============================================================
-  // テンプレート（固定/変動） ハンドラー
-  // ============================================================
-  const handleTemplatePartnerChange = (partnerId: string) => {
-    const resolved = partnerId === "__none__" ? "" : partnerId
-    setTemplateForm((prev) => {
-      const partner = partners.find((p) => p.id === resolved)
-      const defaults = partner?.defaults?.[0]
-      return {
-        ...prev,
-        partnerId: resolved,
-        midId: defaults?.midId || prev.midId,
-        subId: defaults?.subId || prev.subId,
-      }
-    })
-  }
-
-  const handleTemplateMidChange = (midId: string) => {
-    setTemplateForm((prev) => ({ ...prev, midId, subId: "" }))
-  }
-
-  const resetTemplateForm = () => {
-    setTemplateForm(initialTemplateFormState)
-    setEditingTemplateId(null)
-    setTemplateDialogOpen(false)
-  }
-
-  const openNewTemplateForm = () => {
-    setTemplateForm({
-      ...initialTemplateFormState,
-      // タブに応じてclassification設定
-    })
-    setEditingTemplateId(null)
-    setTemplateDialogOpen(true)
-  }
-
-  const handleEditTemplate = (t: ExpenseTemplate) => {
-    setTemplateForm({
-      name: t.name,
-      partnerId: t.partnerId || "",
-      midId: t.midId || "",
-      subId: t.subId || "",
-      dueDayRule: t.dueDayRule,
-      accountingMonthOffset: t.accountingMonthOffset,
-      paymentMethod: t.paymentMethod || "DIRECT_DEBIT",
-      amountType: t.amountType,
-      fixedAmount: t.fixedAmount || "",
-      accountId: t.accountId || "",
-      summary: t.summary || "",
-      isActive: t.isActive,
-    })
-    setEditingTemplateId(t.id)
-    setTemplateDialogOpen(true)
-  }
-
-  const handleTemplateSubmit = async () => {
-    if (!selectedCompany || !templateForm.name) return
-    setTemplateSubmitting(true)
-    try {
-      const classification = activeTab === "TEMPORARY" ? "VARIABLE" : activeTab
-      if (editingTemplateId) {
-        await updateRecurringTemplate(editingTemplateId, selectedCompany.id, {
-          name: templateForm.name,
-          partnerId: templateForm.partnerId || null,
-          midId: templateForm.midId || null,
-          subId: templateForm.subId || null,
-          dueDayRule: templateForm.dueDayRule,
-          accountingMonthOffset: templateForm.accountingMonthOffset,
-          paymentMethod: templateForm.paymentMethod as "BANK_TRANSFER" | "DIRECT_DEBIT" | "CASH_WITHDRAWAL" | null,
-          amountType: templateForm.amountType,
-          fixedAmount: templateForm.fixedAmount || null,
-          accountId: templateForm.accountId || null,
-          summary: templateForm.summary || null,
-          isActive: templateForm.isActive,
-          classification,
-        })
-      } else {
-        await createRecurringTemplate({
-          companyId: selectedCompany.id,
-          name: templateForm.name,
-          frequency: "MONTHLY",
-          dueDayRule: templateForm.dueDayRule,
-          transactionType: "EXPENSE",
-          partnerId: templateForm.partnerId || undefined,
-          midId: templateForm.midId || undefined,
-          subId: templateForm.subId || undefined,
-          accountingMonthOffset: templateForm.accountingMonthOffset,
-          paymentMethod: templateForm.paymentMethod as "BANK_TRANSFER" | "DIRECT_DEBIT" | "CASH_WITHDRAWAL" | undefined,
-          amountType: templateForm.amountType,
-          fixedAmount: templateForm.fixedAmount || undefined,
-          accountId: templateForm.accountId || undefined,
-          summary: templateForm.summary || undefined,
-          classification,
-        })
-      }
-      resetTemplateForm()
-      loadTemplates(selectedCompany.id)
-    } finally {
-      setTemplateSubmitting(false)
-    }
-  }
-
-  const handleDeleteTemplate = async (id: string) => {
-    if (!selectedCompany || !confirm("この経費項目を削除しますか？")) return
-    await deleteRecurringTemplate(id, selectedCompany.id)
-    loadTemplates(selectedCompany.id)
-  }
-
-  const handleToggleActive = async (t: ExpenseTemplate) => {
-    if (!selectedCompany) return
-    await updateRecurringTemplate(t.id, selectedCompany.id, { isActive: !t.isActive })
-    loadTemplates(selectedCompany.id)
-  }
 
   // ============================================================
   // 臨時タブ ハンドラー
@@ -491,18 +322,61 @@ export default function ExpensesPage() {
 
   const handleTempSubmit = async () => {
     if (!selectedCompany || !tempForm.accountId || !tempForm.amount) return
-    if (!isOperator && !tempForm.midId) return // ADMIN は科目必須、OPERATOR は不要
+    if (tempForm.paymentMethod === "FUND_TRANSFER" && !tempForm.destinationAccountId) return
+    if (tempForm.paymentMethod !== "FUND_TRANSFER" && !isOperator && !tempForm.midId) return
     setSubmitting(true)
     try {
+      // 種別 = 資金移動: FundTransfer として作成
+      if (tempForm.paymentMethod === "FUND_TRANSFER" && !editingId) {
+        await createFundTransfer({
+          companyId: selectedCompany.id,
+          fromAccountId: tempForm.accountId,
+          toAccountId: tempForm.destinationAccountId,
+          transferDate: tempForm.transactionDate || tempForm.scheduledDate || new Date().toISOString().split("T")[0],
+          amount: tempForm.amount,
+          accountingMonth: tempForm.accountingMonth,
+          summary: tempForm.summary || "資金移動",
+        })
+        resetTempForm()
+        loadTransactions(selectedCompany.id)
+        return
+      }
+
+      // 振込先情報があれば添付（振込時のみ）
+      const hasBankInfo =
+        tempForm.paymentMethod === "BANK_TRANSFER" &&
+        tempForm.bankCode &&
+        tempForm.branchCode &&
+        tempForm.destAccountNumber &&
+        tempForm.destAccountHolder
+      const bankInfo = hasBankInfo
+        ? {
+            bankCode: tempForm.bankCode,
+            bankName: tempForm.bankName || undefined,
+            branchCode: tempForm.branchCode,
+            branchName: tempForm.branchName || undefined,
+            accountType: tempForm.destAccountType,
+            accountNumber: tempForm.destAccountNumber,
+            accountHolder: tempForm.destAccountHolder,
+          }
+        : undefined
+
+      // PaymentMethod は schema enum 3値のいずれか
+      const dbPaymentMethod = tempForm.paymentMethod as "BANK_TRANSFER" | "DIRECT_DEBIT" | "CASH_WITHDRAWAL"
+
       if (editingId) {
         await updateTransaction(editingId, selectedCompany.id, {
           accountId: tempForm.accountId,
           partnerId: tempForm.partnerId || null,
           temporaryVendorName: tempForm.partnerId ? null : (tempForm.temporaryVendorName || null),
           transactionDate: tempForm.transactionDate || null,
+          scheduledDate: tempForm.scheduledDate || null,
           accountingMonth: tempForm.accountingMonth,
           amount: tempForm.amount,
-          paymentMethod: tempForm.paymentMethod,
+          estimatedAmount: tempForm.estimatedAmount || null,
+          actualAmount: tempForm.amount || null,
+          paymentMethod: dbPaymentMethod,
+          classification: tempForm.classification,
           summary: tempForm.summary || null,
         })
         await upsertTransactionDetails(editingId, [
@@ -521,11 +395,14 @@ export default function ExpensesPage() {
           temporaryVendorName: tempForm.partnerId ? undefined : (tempForm.temporaryVendorName || undefined),
           type: "EXPENSE",
           transactionDate: tempForm.transactionDate || undefined,
+          scheduledDate: tempForm.scheduledDate || undefined,
           accountingMonth: tempForm.accountingMonth,
           amount: tempForm.amount,
-          paymentMethod: tempForm.paymentMethod,
+          estimatedAmount: tempForm.estimatedAmount || undefined,
+          actualAmount: tempForm.amount,
+          paymentMethod: dbPaymentMethod,
           summary: tempForm.summary || undefined,
-          classification: "TEMPORARY",
+          classification: tempForm.classification,
           details: [
             {
               midId: tempForm.midId,
@@ -534,6 +411,7 @@ export default function ExpensesPage() {
               summary: tempForm.summary || undefined,
             },
           ],
+          temporaryBankAccount: bankInfo,
         })
 
         if (createFundTransferFlag && fundTransferSourceId && fundTransferDate) {
@@ -558,13 +436,18 @@ export default function ExpensesPage() {
   const handleEditTemp = (tx: TransactionWithRelations) => {
     const detail = tx.details[0]
     setTempForm({
+      ...initialTempFormState,
       accountId: tx.account.id,
+      destinationAccountId: "",
       partnerId: tx.partner?.id || "",
       temporaryVendorName: tx.temporaryVendorName || "",
+      scheduledDate: tx.scheduledDate ? tx.scheduledDate.split("T")[0] : "",
       transactionDate: tx.transactionDate ? tx.transactionDate.split("T")[0] : "",
       accountingMonth: tx.accountingMonth,
-      paymentMethod: (tx.paymentMethod as "BANK_TRANSFER" | "DIRECT_DEBIT" | "CASH_WITHDRAWAL") || "BANK_TRANSFER",
+      paymentMethod: (tx.paymentMethod as ExpensePaymentMethod) || "BANK_TRANSFER",
       amount: tx.amount,
+      estimatedAmount: tx.estimatedAmount || "",
+      classification: (tx.classification as ExpenseClassification) || "TEMPORARY",
       midId: detail?.mid?.id || "",
       subId: detail?.sub?.id || "",
       summary: tx.summary || "",
@@ -673,70 +556,110 @@ export default function ExpensesPage() {
         <CompanySwitcher />
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="FIXED">固定</TabsTrigger>
-          <TabsTrigger value="VARIABLE">変動</TabsTrigger>
-          <TabsTrigger value="TEMPORARY">臨時</TabsTrigger>
-          <TabsTrigger value="RECEIVED">受領BOX</TabsTrigger>
-        </TabsList>
-
-        {/* ============================================================ */}
-        {/* 固定 / 変動 タブ */}
-        {/* ============================================================ */}
-        {["FIXED", "VARIABLE"].map((tabKey) => (
-          <TabsContent key={tabKey} value={tabKey}>
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>{tabKey === "FIXED" ? "固定" : "変動"}経費一覧</CardTitle>
-                  <Button onClick={openNewTemplateForm}>新規登録</Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {filteredTemplates.length === 0 ? (
-                  <p className="text-muted-foreground text-center py-8">
-                    {tabKey === "FIXED" ? "固定" : "変動"}経費が登録されていません
-                  </p>
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-4">
+            <CardTitle>経費一覧</CardTitle>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Label className="text-sm whitespace-nowrap">月</Label>
+                <Input type="month" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="w-40" />
+              </div>
+              <span className="text-xs text-muted-foreground whitespace-nowrap">口座は混在</span>
+              {listSubTab === "DRAFT" && selectedIds.size > 0 && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={batchLoading}
+                  onClick={handleBatchReady}
+                >
+                  選択を準備完了 ({selectedIds.size})
+                </Button>
+              )}
+              <Button onClick={() => { setTempForm({ ...initialTempFormState, accountId: mainAccountId }); setEditingId(null); setTempDialogOpen(true) }}>
+                + 新規経費
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <Tabs value={listSubTab} onValueChange={(v) => setListSubTab(v as ExpenseListTab)}>
+            <TabsList>
+              {EXPENSE_LIST_TABS.map((t) => (
+                <TabsTrigger key={t.value} value={t.value}>{t.label}</TabsTrigger>
+              ))}
+            </TabsList>
+            {EXPENSE_LIST_TABS.map((t) => (
+              <TabsContent key={t.value} value={t.value} className="mt-4">
+                {loading ? (
+                  <p className="text-muted-foreground text-center py-8">読み込み中...</p>
+                ) : transactions.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-8">{t.label}の経費がありません</p>
                 ) : (
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>名称</TableHead>
-                        <TableHead>取引先</TableHead>
-                        {!isOperator && <TableHead>勘定科目</TableHead>}
-                        <TableHead>支払日</TableHead>
-                        <TableHead>計上月</TableHead>
-                        <TableHead>支払方法</TableHead>
-                        <TableHead>金額タイプ</TableHead>
-                        <TableHead className="text-right">固定金額</TableHead>
-                        <TableHead>有効</TableHead>
-                        <TableHead className="text-right">操作</TableHead>
+                        {listSubTab === "DRAFT" && (
+                          <TableHead className="w-8">
+                            <Checkbox
+                              checked={transactions.length > 0 && transactions.every(tx => selectedIds.has(tx.id))}
+                              onCheckedChange={toggleSelectAll}
+                            />
+                          </TableHead>
+                        )}
+                        <TableHead className="w-32">予定日付</TableHead>
+                        <TableHead>相手先</TableHead>
+                        <TableHead>内容</TableHead>
+                        <TableHead className="text-right w-32">金額</TableHead>
+                        <TableHead className="text-right w-48"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredTemplates.map((t) => {
-                        const midCat = expenseMidCategories.find((m) => m.id === t.midId)
-                        const partnerName = partners.find((p) => p.id === t.partnerId)?.name
+                      {transactions.map((tx) => {
+                        const dateLabel = tx.scheduledDate ? formatDate(tx.scheduledDate) : (tx.transactionDate ? formatDate(tx.transactionDate) : "—")
                         return (
-                          <TableRow key={t.id}>
-                            <TableCell className="font-medium">{t.name}</TableCell>
-                            <TableCell>{partnerName || "—"}</TableCell>
-                            {!isOperator && <TableCell>{midCat?.name || "—"}</TableCell>}
-                            <TableCell>{DUE_DAY_LABELS[t.dueDayRule] || t.dueDayRule}</TableCell>
-                            <TableCell>{OFFSET_LABELS[t.accountingMonthOffset] ?? `${t.accountingMonthOffset}ヶ月`}</TableCell>
-                            <TableCell>{t.paymentMethod ? PAYMENT_METHOD_LABELS[t.paymentMethod] || t.paymentMethod : "—"}</TableCell>
-                            <TableCell>{AMOUNT_TYPE_LABELS[t.amountType] || t.amountType}</TableCell>
-                            <TableCell className="text-right font-mono">
-                              {t.amountType === "FIXED" && t.fixedAmount ? formatYen(Number(t.fixedAmount)) : "—"}
-                            </TableCell>
+                          <TableRow key={tx.id}>
+                            {listSubTab === "DRAFT" && (
+                              <TableCell>
+                                <Checkbox
+                                  checked={selectedIds.has(tx.id)}
+                                  onCheckedChange={() => toggleSelect(tx.id)}
+                                />
+                              </TableCell>
+                            )}
+                            <TableCell className="whitespace-nowrap font-mono text-sm">{dateLabel}</TableCell>
                             <TableCell>
-                              <Switch checked={t.isActive} onCheckedChange={() => handleToggleActive(t)} />
+                              {tx.partner?.name || (tx.temporaryVendorName ? (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-orange-600">{tx.temporaryVendorName}（仮）</span>
+                                  {isAdmin && (
+                                    <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1" onClick={() => openNormalizeDialog(tx.id)}>
+                                      正規化
+                                    </Button>
+                                  )}
+                                </div>
+                              ) : "—")}
                             </TableCell>
+                            <TableCell className="max-w-[280px] truncate">{tx.summary || "—"}</TableCell>
+                            <TableCell className="text-right font-mono">{formatYen(Number(tx.amount))}</TableCell>
                             <TableCell className="text-right">
                               <div className="flex items-center justify-end gap-1">
-                                <Button variant="ghost" size="sm" onClick={() => handleEditTemplate(t)}>編集</Button>
-                                <Button variant="ghost" size="sm" onClick={() => handleDeleteTemplate(t.id)}>削除</Button>
+                                <Button variant="ghost" size="icon" onClick={() => setEvidenceTargetId(tx.id)} title="証憑">
+                                  <Paperclip className="h-4 w-4" />
+                                </Button>
+                                {tx.status === "DRAFT" && (
+                                  <>
+                                    <Button variant="ghost" size="sm" onClick={() => handleEditTemp(tx)}>編集</Button>
+                                    <Button variant="ghost" size="sm" onClick={() => handleStatusChange(tx.id, "READY")}>確認待ちへ</Button>
+                                    <Button variant="ghost" size="sm" onClick={() => handleDeleteTemp(tx.id)}>削除</Button>
+                                  </>
+                                )}
+                                {tx.status === "READY" && (
+                                  <Button variant="ghost" size="sm" onClick={() => handleStatusChange(tx.id, "DRAFT")}>差戻し</Button>
+                                )}
+                                {monthClosed && tx.status !== "DRAFT" && (
+                                  <Button variant="ghost" size="sm" onClick={() => handleEditTemp(tx)}>編集</Button>
+                                )}
                               </div>
                             </TableCell>
                           </TableRow>
@@ -745,320 +668,78 @@ export default function ExpensesPage() {
                     </TableBody>
                   </Table>
                 )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        ))}
+              </TabsContent>
+            ))}
+          </Tabs>
+        </CardContent>
+      </Card>
 
-        {/* ============================================================ */}
-        {/* 臨時 タブ */}
-        {/* ============================================================ */}
-        <TabsContent value="TEMPORARY">
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>支払月BOX — 臨時経費</CardTitle>
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <Label className="text-sm whitespace-nowrap">月</Label>
-                    <Input type="month" value={filterMonth} onChange={(e) => setFilterMonth(e.target.value)} className="w-40" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="showConfirmed"
-                      checked={showConfirmed}
-                      onCheckedChange={(v) => setShowConfirmed(v === true)}
-                    />
-                    <Label htmlFor="showConfirmed" className="text-sm">確定済も表示</Label>
-                  </div>
-                  {selectedIds.size > 0 && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      disabled={batchLoading}
-                      onClick={handleBatchReady}
-                    >
-                      選択を準備完了 ({selectedIds.size})
-                    </Button>
-                  )}
-                  <Button onClick={() => { setTempForm({ ...initialTempFormState, accountId: mainAccountId }); setEditingId(null); setTempDialogOpen(true) }}>新規経費</Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {loading ? (
-                <p className="text-muted-foreground text-center py-8">読み込み中...</p>
-              ) : transactions.length === 0 ? (
-                <p className="text-muted-foreground text-center py-8">臨時経費データがありません</p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-8">
-                        <Checkbox
-                          checked={transactions.filter(t => t.status === "DRAFT").length > 0 && transactions.filter(t => t.status === "DRAFT").every(t => selectedIds.has(t.id))}
-                          onCheckedChange={toggleSelectAll}
-                        />
-                      </TableHead>
-                      <TableHead>予定日</TableHead>
-                      <TableHead>支払先</TableHead>
-                      {!isOperator && <TableHead>勘定科目</TableHead>}
-                      <TableHead>支払方法</TableHead>
-                      <TableHead className="text-right">金額</TableHead>
-                      <TableHead>摘要</TableHead>
-                      <TableHead>状態</TableHead>
-                      <TableHead className="text-right">操作</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {transactions.map((tx) => {
-                      const detail = tx.details[0]
-                      return (
-                        <TableRow key={tx.id}>
-                          <TableCell>
-                            {tx.status === "DRAFT" && (
-                              <Checkbox
-                                checked={selectedIds.has(tx.id)}
-                                onCheckedChange={() => toggleSelect(tx.id)}
-                              />
-                            )}
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap">{tx.scheduledDate ? formatDate(tx.scheduledDate) : (tx.transactionDate ? formatDate(tx.transactionDate) : "—")}</TableCell>
-                          <TableCell>
-                            {tx.partner?.name || (tx.temporaryVendorName ? (
-                              <div className="flex items-center gap-1">
-                                <span className="text-orange-600">{tx.temporaryVendorName}（仮）</span>
-                                {isAdmin && (
-                                  <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1" onClick={() => openNormalizeDialog(tx.id)}>
-                                    正規化
-                                  </Button>
-                                )}
-                              </div>
-                            ) : "—")}
-                          </TableCell>
-                          {!isOperator && (
-                            <TableCell>
-                              {detail?.mid?.name || "—"}
-                              {detail?.sub?.name ? ` / ${detail.sub.name}` : ""}
-                            </TableCell>
-                          )}
-                          <TableCell>
-                            {tx.paymentMethod ? PAYMENT_METHOD_LABELS[tx.paymentMethod] || tx.paymentMethod : "—"}
-                            {isOperator && !detail?.mid?.name && (
-                              <Badge variant="destructive" className="ml-2 text-[10px]">⚠ 科目未設定</Badge>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right font-mono">{formatYen(Number(tx.amount))}</TableCell>
-                          <TableCell className="max-w-[200px] truncate">{tx.summary || "—"}</TableCell>
-                          <TableCell>
-                            <Badge variant={STATUS_VARIANTS[tx.status] || "outline"}>
-                              {STATUS_LABELS[tx.status] || tx.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <Button variant="ghost" size="icon" onClick={() => setEvidenceTargetId(tx.id)} title="証憑">
-                                <Paperclip className="h-4 w-4" />
-                              </Button>
-                              {tx.status === "DRAFT" && (
-                                <>
-                                  <Button variant="ghost" size="sm" onClick={() => handleEditTemp(tx)}>編集</Button>
-                                  <Button variant="ghost" size="sm" onClick={() => handleStatusChange(tx.id, "READY")}>準備完了</Button>
-                                  <Button variant="ghost" size="sm" onClick={() => handleDeleteTemp(tx.id)}>削除</Button>
-                                </>
-                              )}
-                              {tx.status === "READY" && (
-                                <Button variant="ghost" size="sm" onClick={() => handleStatusChange(tx.id, "DRAFT")}>差戻し</Button>
-                              )}
-                              {monthClosed && tx.status !== "DRAFT" && (
-                                <Button variant="ghost" size="sm" onClick={() => handleEditTemp(tx)}>摘要・科目編集</Button>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ============================================================ */}
-        {/* 受領BOX タブ */}
-        {/* ============================================================ */}
-        <TabsContent value="RECEIVED">
-          <ExpenseInboxTab
-            companyId={selectedCompany.id}
-            onAddNew={() => {
-              // 「+ 新規請求書」: 臨時タブのフォームを開いて受領モード扱い
-              setTempForm({
-                ...initialTempFormState,
-                transactionDate: new Date().toISOString().split("T")[0],
-              })
-              setEditingId(null)
-              setActiveTab("TEMPORARY")
-              setTempDialogOpen(true)
-            }}
-          />
-        </TabsContent>
-      </Tabs>
 
       {/* ============================================================ */}
-      {/* テンプレート登録/編集ダイアログ（固定/変動） */}
-      {/* ============================================================ */}
-      <Dialog open={templateDialogOpen} onOpenChange={setTemplateDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{editingTemplateId ? "経費項目を編集" : "新規経費項目登録"}</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>名称 *</Label>
-                <Input value={templateForm.name} onChange={(e) => setTemplateForm((p) => ({ ...p, name: e.target.value }))} placeholder="例: NTT東日本" />
-              </div>
-              <div className="space-y-2">
-                <Label>取引先</Label>
-                <Select value={templateForm.partnerId || "__none__"} onValueChange={handleTemplatePartnerChange}>
-                  <SelectTrigger><SelectValue placeholder="取引先を選択" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">未選択</SelectItem>
-                    {partners.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>勘定科目（中項目）</Label>
-                <Select value={templateForm.midId} onValueChange={handleTemplateMidChange}>
-                  <SelectTrigger><SelectValue placeholder="科目を選択" /></SelectTrigger>
-                  <SelectContent>
-                    {expenseMidCategories.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>補助科目（小項目）</Label>
-                <Select value={templateForm.subId} onValueChange={(v) => setTemplateForm((p) => ({ ...p, subId: v }))} disabled={templateSubCategories.length === 0}>
-                  <SelectTrigger><SelectValue placeholder={templateSubCategories.length === 0 ? "なし" : "選択"} /></SelectTrigger>
-                  <SelectContent>
-                    {templateSubCategories.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>支払予定日 *</Label>
-                <Select value={templateForm.dueDayRule} onValueChange={(v) => setTemplateForm((p) => ({ ...p, dueDayRule: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(DUE_DAY_LABELS).map(([val, label]) => (
-                      <SelectItem key={val} value={val}>{label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>計上月</Label>
-                <Select value={String(templateForm.accountingMonthOffset)} onValueChange={(v) => setTemplateForm((p) => ({ ...p, accountingMonthOffset: parseInt(v) }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="-1">前月分</SelectItem>
-                    <SelectItem value="0">当月分</SelectItem>
-                    <SelectItem value="1">翌月分</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>支払方法</Label>
-                <Select value={templateForm.paymentMethod} onValueChange={(v) => setTemplateForm((p) => ({ ...p, paymentMethod: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="BANK_TRANSFER">振込</SelectItem>
-                    <SelectItem value="DIRECT_DEBIT">引落</SelectItem>
-                    <SelectItem value="CASH_WITHDRAWAL">現金</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>金額タイプ</Label>
-                <Select value={templateForm.amountType} onValueChange={(v) => setTemplateForm((p) => ({ ...p, amountType: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="FIXED">固定額</SelectItem>
-                    <SelectItem value="VARIABLE">変動</SelectItem>
-                    <SelectItem value="MANUAL">手動</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              {templateForm.amountType === "FIXED" && (
-                <div className="space-y-2">
-                  <Label>固定金額</Label>
-                  <Input type="number" placeholder="0" value={templateForm.fixedAmount} onChange={(e) => setTemplateForm((p) => ({ ...p, fixedAmount: e.target.value }))} />
-                </div>
-              )}
-              <div className="space-y-2">
-                <Label>口座</Label>
-                <Select value={templateForm.accountId} onValueChange={(v) => setTemplateForm((p) => ({ ...p, accountId: v }))}>
-                  <SelectTrigger><SelectValue placeholder="口座を選択" /></SelectTrigger>
-                  <SelectContent>
-                    {accounts.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.bankName} {a.branchName} {a.accountNumber}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>摘要</Label>
-              <Input value={templateForm.summary} onChange={(e) => setTemplateForm((p) => ({ ...p, summary: e.target.value }))} placeholder="メモ・摘要を入力" />
-            </div>
-            <div className="flex items-center gap-2">
-              <Switch
-                id="isActive"
-                checked={templateForm.isActive}
-                onCheckedChange={(v) => setTemplateForm((p) => ({ ...p, isActive: v }))}
-              />
-              <Label htmlFor="isActive">有効</Label>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={resetTemplateForm}>キャンセル</Button>
-            <Button onClick={handleTemplateSubmit} disabled={templateSubmitting || !templateForm.name}>
-              {templateSubmitting ? "保存中..." : editingTemplateId ? "更新" : "登録"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ============================================================ */}
-      {/* 臨時経費登録/編集ダイアログ */}
+      {/* 経費 新規登録/編集ダイアログ（PDF P1下スケッチ準拠） */}
       {/* ============================================================ */}
       <Dialog open={tempDialogOpen} onOpenChange={setTempDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingId ? "経費を編集" : "新規臨時経費入力"}{editingId && monthClosed ? "（月締め中：摘要・科目のみ変更可）" : ""}</DialogTitle>
+            <DialogTitle>
+              {editingId ? "経費を編集" : "新規経費入力"}
+              {editingId && monthClosed ? "（月締め中：摘要・科目のみ変更可）" : ""}
+            </DialogTitle>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
+          <div className="grid gap-5 py-2">
+            {/* Row 1: 予定日付 / 実日付 / 種別 / 口座 */}
+            <div className="grid grid-cols-4 gap-4">
               <div className="space-y-2">
-                <Label>口座 *</Label>
-                <Select value={tempForm.accountId} onValueChange={(v) => setTempForm((p) => ({ ...p, accountId: v }))} disabled={editingId !== null && monthClosed}>
-                  <SelectTrigger><SelectValue placeholder="口座を選択" /></SelectTrigger>
+                <Label>予定日付</Label>
+                <Input
+                  type="date"
+                  value={tempForm.scheduledDate}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setTempForm((p) => ({
+                      ...p,
+                      scheduledDate: v,
+                      // 実日付未入力なら 予定日付 を自動展開
+                      transactionDate: p.transactionDate || v,
+                    }))
+                  }}
+                  disabled={editingId !== null && monthClosed}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-amber-700 dark:text-amber-400">実日付 <span className="text-red-500">*</span></Label>
+                <Input
+                  type="date"
+                  value={tempForm.transactionDate}
+                  onChange={(e) => setTempForm((p) => ({ ...p, transactionDate: e.target.value }))}
+                  disabled={editingId !== null && monthClosed}
+                  className="bg-amber-50/40 dark:bg-amber-900/10"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-amber-700 dark:text-amber-400">種別 <span className="text-red-500">*</span></Label>
+                <Select
+                  value={tempForm.paymentMethod}
+                  onValueChange={(v) => setTempForm((p) => ({ ...p, paymentMethod: v as ExpensePaymentMethod }))}
+                  disabled={editingId !== null && (monthClosed || tempForm.paymentMethod === "FUND_TRANSFER")}
+                >
+                  <SelectTrigger className="bg-amber-50/40 dark:bg-amber-900/10"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="FUND_TRANSFER">資金移動</SelectItem>
+                    <SelectItem value="BANK_TRANSFER">振込</SelectItem>
+                    <SelectItem value="DIRECT_DEBIT">引落</SelectItem>
+                    <SelectItem value="CASH_WITHDRAWAL">現金</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-amber-700 dark:text-amber-400">口座 <span className="text-red-500">*</span></Label>
+                <Select
+                  value={tempForm.accountId}
+                  onValueChange={(v) => setTempForm((p) => ({ ...p, accountId: v }))}
+                  disabled={editingId !== null && monthClosed}
+                >
+                  <SelectTrigger className="bg-amber-50/40 dark:bg-amber-900/10"><SelectValue placeholder="口座を選択" /></SelectTrigger>
                   <SelectContent>
                     {accounts.map((a) => (
                       <SelectItem key={a.id} value={a.id}>
@@ -1068,87 +749,277 @@ export default function ExpensesPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label>支払先</Label>
-                <Select value={tempForm.partnerId || "__none__"} onValueChange={handleTempPartnerChange}>
-                  <SelectTrigger><SelectValue placeholder="取引先を選択" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">未選択（仮取引先名を入力）</SelectItem>
-                    {partners.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {!tempForm.partnerId && (
+            </div>
+
+            {/* Row 1b: 資金移動時の第2口座 */}
+            {tempForm.paymentMethod === "FUND_TRANSFER" && (
+              <div className="grid grid-cols-2 gap-4 rounded-md border border-purple-200 bg-purple-50/40 p-3 dark:border-purple-900 dark:bg-purple-950/20">
                 <div className="space-y-2">
-                  <Label>仮取引先名</Label>
-                  <Input
-                    placeholder="正規取引先が未登録の場合に入力"
-                    value={tempForm.temporaryVendorName}
-                    onChange={(e) => setTempForm((p) => ({ ...p, temporaryVendorName: e.target.value }))}
-                  />
+                  <Label>移動先口座 <span className="text-red-500">*</span></Label>
+                  <Select
+                    value={tempForm.destinationAccountId}
+                    onValueChange={(v) => setTempForm((p) => ({ ...p, destinationAccountId: v }))}
+                  >
+                    <SelectTrigger><SelectValue placeholder="移動先口座を選択" /></SelectTrigger>
+                    <SelectContent>
+                      {accounts
+                        .filter((a) => a.id !== tempForm.accountId)
+                        .map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.bankName} {a.branchName} {a.accountNumber}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              )}
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>支払日</Label>
-                <Input type="date" value={tempForm.transactionDate} onChange={(e) => setTempForm((p) => ({ ...p, transactionDate: e.target.value }))} disabled={editingId !== null && monthClosed} />
+                <div className="space-y-1 self-end text-xs text-muted-foreground">
+                  ※資金移動の場合は移動元/先の2口座を入力します。資金繰表に両側自動反映されます。
+                </div>
               </div>
-              <div className="space-y-2">
-                <Label>計上月 *</Label>
-                <Input type="month" value={tempForm.accountingMonth} onChange={(e) => setTempForm((p) => ({ ...p, accountingMonth: e.target.value }))} disabled={editingId !== null && monthClosed} />
-              </div>
-              <div className="space-y-2">
-                <Label>支払方法</Label>
-                <Select value={tempForm.paymentMethod} onValueChange={(v) => setTempForm((p) => ({ ...p, paymentMethod: v as typeof tempForm.paymentMethod }))} disabled={editingId !== null && monthClosed}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="BANK_TRANSFER">振込</SelectItem>
-                    <SelectItem value="DIRECT_DEBIT">引落</SelectItem>
-                    <SelectItem value="CASH_WITHDRAWAL">現金</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>金額 *</Label>
-                <Input type="number" placeholder="0" value={tempForm.amount} onChange={(e) => setTempForm((p) => ({ ...p, amount: e.target.value }))} disabled={editingId !== null && monthClosed} />
-              </div>
-              {!isOperator && (
-                <>
+            )}
+
+            {/* Row 2: 相手先 / 内容 / 区分 （資金移動では非表示） */}
+            {tempForm.paymentMethod !== "FUND_TRANSFER" && (
+              <>
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>勘定科目（中項目） *</Label>
-                    <Select value={tempForm.midId} onValueChange={handleTempMidChange}>
-                      <SelectTrigger><SelectValue placeholder="科目を選択" /></SelectTrigger>
+                    <Label>相手先</Label>
+                    <Select value={tempForm.partnerId || "__none__"} onValueChange={handleTempPartnerChange}>
+                      <SelectTrigger><SelectValue placeholder="取引先を選択（新規は仮名で）" /></SelectTrigger>
                       <SelectContent>
-                        {expenseMidCategories.map((m) => (
-                          <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
+                        <SelectItem value="__none__">未選択（仮取引先名を入力）</SelectItem>
+                        {partners.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
+                  {!tempForm.partnerId && (
+                    <div className="space-y-2">
+                      <Label>仮取引先名</Label>
+                      <Input
+                        placeholder="正規取引先が未登録の場合に入力"
+                        value={tempForm.temporaryVendorName}
+                        onChange={(e) => setTempForm((p) => ({ ...p, temporaryVendorName: e.target.value }))}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2 col-span-2">
+                    <Label className="flex items-center justify-between">
+                      <span className="text-amber-700 dark:text-amber-400">内容 <span className="text-red-500">*</span></span>
+                      <span className="text-xs text-muted-foreground">
+                        {tempForm.summary.length}/{SUMMARY_MAX_LENGTH}
+                      </span>
+                    </Label>
+                    <Input
+                      value={tempForm.summary}
+                      maxLength={SUMMARY_MAX_LENGTH}
+                      onChange={(e) => setTempForm((p) => ({ ...p, summary: e.target.value }))}
+                      placeholder="例: 4月分電気代"
+                      className="bg-amber-50/40 dark:bg-amber-900/10"
+                    />
+                  </div>
                   <div className="space-y-2">
-                    <Label>補助科目（小項目）</Label>
-                    <Select value={tempForm.subId} onValueChange={(v) => setTempForm((p) => ({ ...p, subId: v }))} disabled={tempSubCategories.length === 0}>
-                      <SelectTrigger><SelectValue placeholder={tempSubCategories.length === 0 ? "なし" : "選択"} /></SelectTrigger>
+                    <Label>区分</Label>
+                    <Select
+                      value={tempForm.classification}
+                      onValueChange={(v) => setTempForm((p) => ({ ...p, classification: v as ExpenseClassification }))}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {tempSubCategories.map((s) => (
-                          <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                        ))}
+                        <SelectItem value="FIXED">固定</SelectItem>
+                        <SelectItem value="VARIABLE">変動</SelectItem>
+                        <SelectItem value="TEMPORARY">臨時</SelectItem>
+                        <SelectItem value="RECURRING">定期</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                </>
-              )}
+                </div>
+              </>
+            )}
+
+            {/* Row 3: 予定金額 / 実金額 / 差額 */}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>予定金額</Label>
+                <Input
+                  type="number"
+                  placeholder="0"
+                  value={tempForm.estimatedAmount}
+                  onChange={(e) => setTempForm((p) => ({ ...p, estimatedAmount: e.target.value }))}
+                  disabled={editingId !== null && monthClosed}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-amber-700 dark:text-amber-400">実金額 <span className="text-red-500">*</span></Label>
+                <Input
+                  type="number"
+                  placeholder="0"
+                  value={tempForm.amount}
+                  onChange={(e) => setTempForm((p) => ({ ...p, amount: e.target.value }))}
+                  disabled={editingId !== null && monthClosed}
+                  className="bg-amber-50/40 dark:bg-amber-900/10"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>差額</Label>
+                <div className="flex h-10 items-center rounded-md border bg-muted/40 px-3 text-sm">
+                  {(() => {
+                    const e = Number(tempForm.estimatedAmount || 0)
+                    const a = Number(tempForm.amount || 0)
+                    if (!tempForm.estimatedAmount || !tempForm.amount) {
+                      return <span className="text-muted-foreground">—</span>
+                    }
+                    const diff = a - e
+                    if (diff === 0) return <span className="text-muted-foreground">差額なし</span>
+                    return (
+                      <span className={diff > 0 ? "text-red-600" : "text-blue-600"}>
+                        {diff > 0 ? "△ " : "+ "}
+                        {formatYen(Math.abs(diff))}
+                      </span>
+                    )
+                  })()}
+                </div>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>摘要</Label>
-              <Input value={tempForm.summary} onChange={(e) => setTempForm((p) => ({ ...p, summary: e.target.value }))} placeholder="メモ・摘要を入力" />
+
+            {/* Row 4: 科目設定 / 補助 （資金移動では非表示） */}
+            {tempForm.paymentMethod !== "FUND_TRANSFER" && !isOperator && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>勘定科目（中項目） <span className="text-red-500">*</span></Label>
+                  <Select value={tempForm.midId} onValueChange={handleTempMidChange}>
+                    <SelectTrigger><SelectValue placeholder="科目を選択" /></SelectTrigger>
+                    <SelectContent>
+                      {expenseMidCategories.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>補助科目（小項目）</Label>
+                  <Select
+                    value={tempForm.subId}
+                    onValueChange={(v) => setTempForm((p) => ({ ...p, subId: v }))}
+                    disabled={tempSubCategories.length === 0}
+                  >
+                    <SelectTrigger><SelectValue placeholder={tempSubCategories.length === 0 ? "なし" : "選択"} /></SelectTrigger>
+                    <SelectContent>
+                      {tempSubCategories.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+
+            {/* Row 5: 計上月 */}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>計上月 <span className="text-red-500">*</span></Label>
+                <Input
+                  type="month"
+                  value={tempForm.accountingMonth}
+                  onChange={(e) => setTempForm((p) => ({ ...p, accountingMonth: e.target.value }))}
+                  disabled={editingId !== null && monthClosed}
+                />
+              </div>
             </div>
-            {showFundTransferOption && (
+
+            {/* Row 6: 振込先情報（種別=振込のみ表示） */}
+            {tempForm.paymentMethod === "BANK_TRANSFER" && (
+              <div className="space-y-3 rounded-md border bg-muted/30 p-4">
+                <div className="flex items-baseline justify-between">
+                  <Label className="text-base font-semibold">振込先情報</Label>
+                  <span className="text-xs text-muted-foreground">※半角入力 / 既存取引先口座があれば未入力でOK</span>
+                </div>
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">銀行コード</Label>
+                    <Input
+                      value={tempForm.bankCode}
+                      maxLength={4}
+                      placeholder="0001"
+                      onChange={(e) => setTempForm((p) => ({ ...p, bankCode: e.target.value.replace(/[^0-9]/g, "") }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">銀行名</Label>
+                    <Input
+                      value={tempForm.bankName}
+                      placeholder="〇〇銀行"
+                      onChange={(e) => setTempForm((p) => ({ ...p, bankName: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">支店コード</Label>
+                    <Input
+                      value={tempForm.branchCode}
+                      maxLength={3}
+                      placeholder="001"
+                      onChange={(e) => setTempForm((p) => ({ ...p, branchCode: e.target.value.replace(/[^0-9]/g, "") }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">支店名</Label>
+                    <Input
+                      value={tempForm.branchName}
+                      placeholder="〇〇支店"
+                      onChange={(e) => setTempForm((p) => ({ ...p, branchName: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">預金種別</Label>
+                    <Select
+                      value={tempForm.destAccountType}
+                      onValueChange={(v) => setTempForm((p) => ({ ...p, destAccountType: v as "ORDINARY" | "CURRENT" }))}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ORDINARY">普通</SelectItem>
+                        <SelectItem value="CURRENT">当座</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">口座No.</Label>
+                    <Input
+                      value={tempForm.destAccountNumber}
+                      maxLength={8}
+                      placeholder="1234567"
+                      onChange={(e) => setTempForm((p) => ({ ...p, destAccountNumber: e.target.value.replace(/[^0-9]/g, "") }))}
+                    />
+                  </div>
+                  <div className="col-span-2 space-y-1">
+                    <Label className="text-xs">口座名義（半角カナ）</Label>
+                    <Input
+                      value={tempForm.destAccountHolder}
+                      placeholder="ｶﾌﾞｼｷｶﾞｲｼｬ ｱｲｳｴｵ"
+                      onChange={(e) => setTempForm((p) => ({ ...p, destAccountHolder: e.target.value }))}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Row 7: 帳票添付ガイド */}
+            {!editingId && (
+              <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">帳票添付（PDF）</span>
+                ：登録後に一覧の <Paperclip className="inline h-3 w-3" /> アイコンから添付できます。
+                <span className="ml-2">※帳票なしでもOKフラグを管理者が付けられます。</span>
+              </div>
+            )}
+
+            {/* 原資の資金移動オプション（振込/引落/現金で主口座以外を使う場合のみ） */}
+            {tempForm.paymentMethod !== "FUND_TRANSFER" && showFundTransferOption && (
               <div className="border rounded-md p-4 space-y-3">
                 <div className="flex items-center gap-2">
                   <Checkbox
@@ -1187,7 +1058,18 @@ export default function ExpensesPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={resetTempForm}>キャンセル</Button>
-            <Button onClick={handleTempSubmit} disabled={submitting || !tempForm.accountId || !tempForm.amount || !tempForm.midId}>
+            <Button
+              onClick={handleTempSubmit}
+              disabled={
+                submitting ||
+                !tempForm.accountId ||
+                !tempForm.amount ||
+                !tempForm.transactionDate ||
+                (tempForm.paymentMethod === "FUND_TRANSFER"
+                  ? !tempForm.destinationAccountId
+                  : !tempForm.summary || (!isOperator && !tempForm.midId))
+              }
+            >
               {submitting ? "保存中..." : editingId ? "更新" : "登録"}
             </Button>
           </DialogFooter>

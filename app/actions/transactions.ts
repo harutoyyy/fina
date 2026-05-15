@@ -36,6 +36,7 @@ export type TransactionWithRelations = {
   isDateException: boolean
   confirmedAt: string | null
   confirmedBy: string | null
+  recurringTemplateId: string | null
   createdAt: string
   updatedAt: string
   account: { id: string; bankName: string | null; branchName: string | null; accountNumber: string | null }
@@ -132,6 +133,8 @@ export async function createTransaction(data: {
   scheduledDate?: string
   accountingMonth: string
   amount: string
+  estimatedAmount?: string
+  actualAmount?: string
   paymentMethod?: PaymentMethod
   summary?: string
   classification?: string
@@ -146,6 +149,15 @@ export async function createTransaction(data: {
     amount: string
     summary?: string
   }[]
+  temporaryBankAccount?: {
+    bankCode: string
+    bankName?: string
+    branchCode: string
+    branchName?: string
+    accountType: string
+    accountNumber: string
+    accountHolder: string
+  }
 }) {
   const session = await requireSession()
   const role = await getUserRole(session.user.id)
@@ -165,6 +177,8 @@ export async function createTransaction(data: {
       scheduledDate: data.scheduledDate ? new Date(data.scheduledDate) : undefined,
       accountingMonth: data.accountingMonth,
       amount: BigInt(data.amount),
+      estimatedAmount: data.estimatedAmount ? BigInt(data.estimatedAmount) : undefined,
+      actualAmount: data.actualAmount ? BigInt(data.actualAmount) : undefined,
       paymentMethod: data.paymentMethod || undefined,
       summary: data.summary || undefined,
       classification: data.classification || undefined,
@@ -182,6 +196,19 @@ export async function createTransaction(data: {
               summary: d.summary || undefined,
               displayOrder: i,
             })),
+          }
+        : undefined,
+      temporaryBankAccount: data.temporaryBankAccount
+        ? {
+            create: {
+              bankCode: data.temporaryBankAccount.bankCode,
+              bankName: data.temporaryBankAccount.bankName || null,
+              branchCode: data.temporaryBankAccount.branchCode,
+              branchName: data.temporaryBankAccount.branchName || null,
+              accountType: data.temporaryBankAccount.accountType,
+              accountNumber: data.temporaryBankAccount.accountNumber,
+              accountHolder: data.temporaryBankAccount.accountHolder,
+            },
           }
         : undefined,
     },
@@ -213,7 +240,10 @@ export async function updateTransaction(
     scheduledDate?: string | null
     accountingMonth?: string
     amount?: string
+    estimatedAmount?: string | null
+    actualAmount?: string | null
     paymentMethod?: PaymentMethod | null
+    classification?: string | null
     summary?: string | null
     invoiceDate?: string | null
     invoiceAmount?: string | null
@@ -271,7 +301,10 @@ export async function updateTransaction(
   }
   if (data.accountingMonth !== undefined) updateData.accountingMonth = data.accountingMonth
   if (data.amount !== undefined) updateData.amount = BigInt(data.amount)
+  if (data.estimatedAmount !== undefined) updateData.estimatedAmount = data.estimatedAmount ? BigInt(data.estimatedAmount) : null
+  if (data.actualAmount !== undefined) updateData.actualAmount = data.actualAmount ? BigInt(data.actualAmount) : null
   if (data.paymentMethod !== undefined) updateData.paymentMethod = data.paymentMethod
+  if (data.classification !== undefined) updateData.classification = data.classification
   if (data.summary !== undefined) updateData.summary = data.summary
   if (data.invoiceDate !== undefined) updateData.invoiceDate = data.invoiceDate ? new Date(data.invoiceDate) : null
   if (data.invoiceAmount !== undefined) updateData.invoiceAmount = data.invoiceAmount ? BigInt(data.invoiceAmount) : null

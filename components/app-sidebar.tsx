@@ -20,7 +20,6 @@ import {
   Settings,
   CalendarCheck,
   TableProperties,
-  ArrowRightLeft,
   Building,
   MinusCircle,
   Inbox,
@@ -37,9 +36,7 @@ import { Separator } from "@/components/ui/separator"
 
 const navigation = [
   { name: "ダッシュボード", href: "/dashboard", icon: LayoutDashboard },
-  { name: "グループ別サマリ", href: "/group-summary", icon: Layers },
   { name: "資金繰り表", href: "/cashflow-table", icon: TableProperties },
-  { name: "資金移動", href: "/cashflow", icon: ArrowRightLeft },
 ]
 
 const inputNavigation = [
@@ -56,7 +53,7 @@ const managementNavigation = [
   { name: "リース管理", href: "/leases", icon: Repeat },
   { name: "納税予定表", href: "/tax-schedule", icon: ScrollText },
   { name: "カード明細", href: "/card-statements", icon: Wallet },
-  { name: "定期テンプレート", href: "/recurring", icon: BookOpen },
+  { name: "定期支払", href: "/recurring", icon: BookOpen },
 ]
 
 const masterNavigation = [
