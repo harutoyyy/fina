@@ -32,6 +32,7 @@ export default function CompaniesPage() {
     postalCode: "", addressPrefecture: "", addressCity: "", addressStreet: "", addressBuilding: "",
     phone: "", fax: "", email: "", website: "",
     corporateNumber: "", invoiceNumber: "",
+    eTaxNumber: "", capitalAmount: "", accountingManager: "",
     fiscalMonth: 3, establishedDate: "", status: "ACTIVE", notes: "",
   })
 
@@ -57,7 +58,11 @@ export default function CompaniesPage() {
       addressStreet: company.addressStreet || "", addressBuilding: company.addressBuilding || "",
       phone: company.phone || "", fax: company.fax || "", email: company.email || "",
       website: company.website || "", corporateNumber: company.corporateNumber || "",
-      invoiceNumber: company.invoiceNumber || "", fiscalMonth: company.fiscalMonth,
+      invoiceNumber: company.invoiceNumber || "",
+      eTaxNumber: company.eTaxNumber || "",
+      capitalAmount: company.capitalAmount ? company.capitalAmount.toString() : "",
+      accountingManager: company.accountingManager || "",
+      fiscalMonth: company.fiscalMonth,
       establishedDate: company.establishedDate ? company.establishedDate.toISOString().split("T")[0] : "",
       status: company.status || "ACTIVE",
       notes: company.notes || "",
@@ -87,6 +92,9 @@ export default function CompaniesPage() {
       website: formData.website || undefined,
       corporateNumber: formData.corporateNumber || undefined,
       invoiceNumber: formData.invoiceNumber || undefined,
+      eTaxNumber: formData.eTaxNumber || undefined,
+      capitalAmount: formData.capitalAmount === "" ? null : formData.capitalAmount,
+      accountingManager: formData.accountingManager || undefined,
       establishedDate: formData.establishedDate || undefined,
       status: formData.status,
       notes: formData.notes || undefined,
@@ -253,6 +261,26 @@ export default function CompaniesPage() {
               <div className="space-y-2">
                 <Label>インボイス番号</Label>
                 <Input value={formData.invoiceNumber} onChange={(e) => setFormData({ ...formData, invoiceNumber: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>e-Tax利用者識別番号</Label>
+                <Input value={formData.eTaxNumber} onChange={(e) => setFormData({ ...formData, eTaxNumber: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <Label>資本金（円）</Label>
+                <Input
+                  type="text"
+                  inputMode="numeric"
+                  value={formData.capitalAmount}
+                  onChange={(e) => setFormData({ ...formData, capitalAmount: e.target.value.replace(/[^\d]/g, "") })}
+                  placeholder="例: 10000000"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>経理担当者</Label>
+                <Input value={formData.accountingManager} onChange={(e) => setFormData({ ...formData, accountingManager: e.target.value })} />
               </div>
             </div>
             <div className="grid grid-cols-3 gap-4">

@@ -7,8 +7,6 @@ playwright.config.ts
 # Local dev tools / docs
 /.claude
 /docs
-replit.md
-.replit
 backup.sql
 *.xlsx
 *.pdf

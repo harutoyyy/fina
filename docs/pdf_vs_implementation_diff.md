@@ -33,7 +33,12 @@
 | 同日同時ルール（引落＞資金移動・振込・現金＞入金） | ✅ | Phase 1 で実装。`app/actions/cashflow-table.ts` の `paymentPriority` 関数（L96〜）→ `getCashFlowTable` の同日内ソート（L192） |
 | ドラッグ&ドロップ並べ替え＋日付変更ポップアップ | ✅ | dnd-kit, L1030 |
 | 残高即時再計算 | ✅ | runningBalance 計算 |
-| 帳票作成（資金移動・現金 → PDF） | △ | `window.print()` のみ、PDFテンプレなし |
+| 帳票作成（資金移動・現金 → PDF） | ✅ | Phase 4 で実装。`app/actions/cashflow-reports.ts` + 資金繰表ページ「帳票作成」ボタン → 別ウィンドウA4印刷HTML（資金移動 / 振込 / 現金+金種表 の3種） |
+| **当月入金合計 / 出金合計 / 予測残高 サマリ** | ✅ | Phase 4 で5枚カード化（期首・入金・出金・予測月末残高・会社情報）|
+| **グループ間入金/出金が分かるように** | ✅ | Phase 4 で `interGroupDeposit/Withdrawal` を `getCashFlowTable` 戻り値に追加、当月入金/支払カードに「内 グループ間」サブ表示。行は紫の左ボーダー + 「G間」バッジ |
+| **未達は予定と同じ日付・薄色表示** | ✅ | Phase 4 で `isOverdue` フラグを `getCashFlowTable` に追加。予定日が過去かつ未確定な行を `opacity-60 italic` でハイライト + 「未達」バッジ表示 |
+| **金額には全て科目設定が必須** | △ | UIではdetailsで科目選択可だが必須バリデーションは弱い |
+| **会社情報一覧（法人番号/設立年月日/資本金/e-Tax番号/経理担当）** | ✅ | Phase 4 で実装。`Company` スキーマに `eTaxNumber`/`capitalAmount`/`accountingManager` 追加、会社マスタで編集、資金繰表に会社情報カード+詳細ダイアログ |
 
 ### 📄 P1下〜P2: 経費入力・経費一覧
 
@@ -234,3 +239,26 @@ Phase 2 候補の残項目をまとめて実装。Migration: `prisma/migrations/
 - `applicableCompanyIds` をカンマ区切り文字列で保持（空=全社対象）
 - `getSalesItemsForCompany(companyId)` で会社別の利用可能項目を取得可能
 - 管理者のみ編集可
+
+## Phase 4 実装履歴（2026-05-14）
+
+PDF P1「資金繰表」セクションの残ギャップを集中実装。Migration: `prisma/migrations/20260514000000_phase4_cashflow_company_info/migration.sql`。
+
+| 項目 | 該当ファイル |
+|---|---|
+| P1: 帳票作成（資金移動・振込・現金+金種表） | `app/actions/cashflow-reports.ts` (新規), `app/(dashboard)/cashflow-table/page.tsx` `buildReportHtml` 関数 + ボタン + プレビューダイアログ |
+| P1: グループ間入金/出金の区別表示 | `app/actions/cashflow-table.ts` で `interGroupDeposit/Withdrawal` を集計、サマリカードに「内 グループ間」サブ表示、行は紫の左ボーダー + G間バッジ |
+| P1: 未達(予定日超過・未確定)の薄色表示 | `getCashFlowTable` で `isOverdue` フラグ算出、行を `opacity-60 italic` でハイライト + 未達バッジ |
+| P1: 会社情報一覧パネル | `Company.eTaxNumber/capitalAmount/accountingManager` 追加, `getCompanyInfoSummary` action, 資金繰表に会社情報カード + 詳細ダイアログ |
+| 会社マスタに新フィールド入力 | `app/(dashboard)/master/companies/page.tsx` 編集ダイアログ拡張 |
+
+**帳票作成の仕様**
+- 「連続した選択行（同一種別）」のみ対象。種別が混在していたら拒否
+- 資金移動: 自社口座 → 移動先口座（FundTransferから取得）+ 行明細 + 合計
+- 振込: 振込先口座情報（取引先のbankAccountから自動引き）+ 件数 + 振込合計 + 自社負担手数料合計
+- 現金: 行明細 + 件数 + 合計 + 金種表（10000/5000/1000/500/100/50/10/5/1、印刷後手書き想定）
+- A4印刷HTMLを別ウィンドウで開く方式（Radix dialog内のwindow.print()干渉を回避）
+
+**未達判定ロジック**
+- `status !== "CONFIRMED"` かつ `scheduledDate < 今日` かつ `actualAmount === null OR transactionDate === null`
+- マスタ管理外、純粋にgetCashFlowTableで動的判定

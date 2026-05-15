@@ -137,6 +137,9 @@ model Company {
   website         String?   // WebサイトURL
   corporateNumber String?   // 法人番号（13桁）
   invoiceNumber   String?   // インボイス登録番号
+  eTaxNumber      String?   // e-Tax利用者識別番号（PDF P1 会社情報一覧）
+  capitalAmount   BigInt?   // 資本金（円）（PDF P1 会社情報一覧）
+  accountingManager String? // 経理担当者名（PDF P1 会社情報一覧）
   fiscalMonth     Int       @default(3) // 決算月（1〜12）
   establishedDate DateTime? // 設立日
   status          String    @default("ACTIVE") // ACTIVE/DORMANT/LIQUIDATING

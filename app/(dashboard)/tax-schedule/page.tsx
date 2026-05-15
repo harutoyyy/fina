@@ -38,9 +38,8 @@ import {
   updateTaxSchedule,
   deleteTaxSchedule,
   generateInterimTaxSchedules,
-  TAX_TYPE_LABELS,
-  type TaxType,
 } from "@/app/actions/tax-schedule"
+import { TAX_TYPE_LABELS, type TaxType } from "@/lib/tax-schedule"
 
 type ScheduleRow = Awaited<ReturnType<typeof getTaxSchedules>>[number]
 

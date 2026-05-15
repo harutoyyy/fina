@@ -60,6 +60,9 @@ export type CashFlowRow = {
   recordedAmount: string | null
   transferAmount: string | null
   paymentMethod: string | null
+  linkedTransactionId: string | null  // グループ間取引判定（PDF P1: グループ間入金/出金区別）
+  isInterGroup: boolean                // linkedTransactionId !== null の便利フラグ
+  isOverdue: boolean                   // 予定日超過・未確定の取引（PDF P1: 未達薄色表示）
   details: {
     id: string
     midId: string | null
@@ -86,6 +89,9 @@ export type CashFlowTableData = {
   totalDeposit: string
   totalWithdrawal: string
   closingBalance: string
+  // PDF P1: グループ間入金/出金が分かるように
+  interGroupDeposit: string
+  interGroupWithdrawal: string
   checkpoints: CheckpointData[]
 }
 
@@ -216,6 +222,12 @@ export async function getCashFlowTable(
   let runningBalance = openingBalance
   let totalDeposit = BigInt(0)
   let totalWithdrawal = BigInt(0)
+  let interGroupDeposit = BigInt(0)
+  let interGroupWithdrawal = BigInt(0)
+
+  // 未達判定の基準日（今日の始まり）
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
 
   const rows: CashFlowRow[] = transactions.map((tx) => {
     const amount = tx.amount
@@ -225,6 +237,20 @@ export async function getCashFlowTable(
       totalWithdrawal += amount
     }
     runningBalance += amount
+
+    const isInterGroup = tx.linkedTransactionId !== null
+    if (isInterGroup) {
+      if (amount > BigInt(0)) interGroupDeposit += amount
+      else interGroupWithdrawal += amount
+    }
+
+    // PDF P1: 未達 = 予定日が過去かつ実日付未確定（actualAmount 未入力 or status != CONFIRMED）
+    const sched = tx.scheduledDate
+    const isOverdue =
+      tx.status !== "CONFIRMED" &&
+      sched !== null &&
+      sched < todayStart &&
+      (tx.actualAmount === null || tx.transactionDate === null)
 
     return {
       id: tx.id,
@@ -248,6 +274,9 @@ export async function getCashFlowTable(
       recordedAmount: tx.recordedAmount?.toString() ?? null,
       transferAmount: tx.transferAmount?.toString() ?? null,
       paymentMethod: tx.paymentMethod,
+      linkedTransactionId: tx.linkedTransactionId,
+      isInterGroup,
+      isOverdue,
       details: tx.details.map((d) => ({
         id: d.id,
         midId: d.midId,
@@ -268,6 +297,8 @@ export async function getCashFlowTable(
     totalDeposit: totalDeposit.toString(),
     totalWithdrawal: totalWithdrawal.toString(),
     closingBalance: closingBalance.toString(),
+    interGroupDeposit: interGroupDeposit.toString(),
+    interGroupWithdrawal: interGroupWithdrawal.toString(),
     checkpoints: checkpoints.map((cp) => ({
       id: cp.id,
       checkpointDate: cp.checkpointDate.toISOString(),
@@ -277,74 +308,6 @@ export async function getCashFlowTable(
       note: cp.note,
     })),
   }
-}
-
-export async function getMonthlyBalance(
-  companyId: string,
-  accountId: string,
-  yearMonth: string
-) {
-  await requireSession()
-  await verifyCompanyAccess(companyId)
-
-  const balance = await prisma.monthlyBalance.findUnique({
-    where: {
-      accountId_yearMonth: { accountId, yearMonth },
-    },
-  })
-
-  return bigintToJson(balance)
-}
-
-export async function upsertMonthlyBalance(
-  companyId: string,
-  accountId: string,
-  yearMonth: string,
-  openingBalance: string
-) {
-  await requireSession()
-  await verifyCompanyAccess(companyId)
-  await ensureMonthOpen(companyId, yearMonth)
-
-  const account = await prisma.account.findUnique({ where: { id: accountId } })
-  if (!account || account.companyId !== companyId) {
-    throw new Error("Account not found")
-  }
-
-  const openBal = BigInt(openingBalance)
-
-  const transactions = await prisma.transaction.findMany({
-    where: {
-      companyId,
-      accountId,
-      accountingMonth: yearMonth,
-    },
-    select: { amount: true },
-  })
-
-  const totalAmount = transactions.reduce((sum, tx) => sum + tx.amount, BigInt(0))
-  const closingBal = openBal + totalAmount
-
-  const result = await prisma.monthlyBalance.upsert({
-    where: {
-      accountId_yearMonth: { accountId, yearMonth },
-    },
-    create: {
-      companyId,
-      accountId,
-      yearMonth,
-      openingBalance: openBal,
-      closingBalance: closingBal,
-    },
-    update: {
-      openingBalance: openBal,
-      closingBalance: closingBal,
-    },
-  })
-
-  revalidatePath("/cashflow-table")
-  revalidatePath("/monthly-close")
-  return bigintToJson(result)
 }
 
 export async function recalculateClosingBalance(
@@ -387,7 +350,6 @@ export async function recalculateClosingBalance(
   })
 
   revalidatePath("/cashflow-table")
-  revalidatePath("/monthly-close")
   return bigintToJson(result)
 }
 
@@ -449,7 +411,6 @@ export async function closeMonth(
   })
 
   revalidatePath("/cashflow-table")
-  revalidatePath("/monthly-close")
   return bigintToJson(result)
 }
 
@@ -503,7 +464,6 @@ export async function reopenMonth(
   })
 
   revalidatePath("/cashflow-table")
-  revalidatePath("/monthly-close")
   return bigintToJson(result)
 }
 

@@ -4,23 +4,7 @@ import { prisma } from "@/lib/prisma"
 import { requireSession } from "@/lib/auth-server"
 import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
-
-export type TaxType =
-  | "CORPORATE"      // 法人税
-  | "CONSUMPTION"    // 消費税
-  | "RESIDENT"       // 法人住民税
-  | "BUSINESS"       // 事業税
-  | "FIXED_ASSET"    // 固定資産税
-  | "OTHER"
-
-export const TAX_TYPE_LABELS: Record<TaxType, string> = {
-  CORPORATE: "法人税",
-  CONSUMPTION: "消費税",
-  RESIDENT: "法人住民税",
-  BUSINESS: "事業税",
-  FIXED_ASSET: "固定資産税",
-  OTHER: "その他",
-}
+import type { TaxType } from "@/lib/tax-schedule"
 
 // PDF P9: 中間納税の閾値
 // 法人税: 前年確定税額 20万円超 → 中間1回（半期）

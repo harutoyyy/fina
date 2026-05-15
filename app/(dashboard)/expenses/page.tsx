@@ -40,6 +40,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import EvidencePanel from "@/components/evidence-panel"
 import { Paperclip } from "lucide-react"
 import { getCurrentUserProfile, type CurrentUserProfile } from "@/app/actions/user-profile"
+import { ExpenseInboxTab } from "@/components/expense-inbox-tab"
 
 type AccountOption = {
   id: string
@@ -335,6 +336,14 @@ export default function ExpensesPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, transactions])
+
+  // ?tab=XXX クエリ で初期タブを設定（/expense-box からのリダイレクト互換）
+  useEffect(() => {
+    const tab = searchParams.get("tab")
+    if (tab && ["FIXED", "VARIABLE", "TEMPORARY", "RECEIVED"].includes(tab)) {
+      setActiveTab(tab)
+    }
+  }, [searchParams])
 
   // ============================================================
   // テンプレート（固定/変動） ハンドラー
@@ -669,6 +678,7 @@ export default function ExpensesPage() {
           <TabsTrigger value="FIXED">固定</TabsTrigger>
           <TabsTrigger value="VARIABLE">変動</TabsTrigger>
           <TabsTrigger value="TEMPORARY">臨時</TabsTrigger>
+          <TabsTrigger value="RECEIVED">受領BOX</TabsTrigger>
         </TabsList>
 
         {/* ============================================================ */}
@@ -873,6 +883,25 @@ export default function ExpensesPage() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* ============================================================ */}
+        {/* 受領BOX タブ */}
+        {/* ============================================================ */}
+        <TabsContent value="RECEIVED">
+          <ExpenseInboxTab
+            companyId={selectedCompany.id}
+            onAddNew={() => {
+              // 「+ 新規請求書」: 臨時タブのフォームを開いて受領モード扱い
+              setTempForm({
+                ...initialTempFormState,
+                transactionDate: new Date().toISOString().split("T")[0],
+              })
+              setEditingId(null)
+              setActiveTab("TEMPORARY")
+              setTempDialogOpen(true)
+            }}
+          />
         </TabsContent>
       </Tabs>
 

@@ -44,7 +44,6 @@ const navigation = [
 
 const inputNavigation = [
   { name: "経費入力", href: "/expenses", icon: Receipt },
-  { name: "経費確定BOX", href: "/expense-box", icon: Inbox },
   { name: "売上入力", href: "/sales", icon: TrendingUp },
   { name: "原価支払", href: "/costs", icon: Hammer },
   { name: "給与入力", href: "/salary", icon: Users },
@@ -58,14 +57,12 @@ const managementNavigation = [
   { name: "納税予定表", href: "/tax-schedule", icon: ScrollText },
   { name: "カード明細", href: "/card-statements", icon: Wallet },
   { name: "定期テンプレート", href: "/recurring", icon: BookOpen },
-  { name: "月次処理", href: "/monthly-close", icon: CalendarCheck },
 ]
 
 const masterNavigation = [
   { name: "会社一覧", href: "/master/companies", icon: Building2 },
   { name: "会社グループ", href: "/master/company-groups", icon: Layers },
   { name: "銀行口座", href: "/master/accounts", icon: CreditCard },
-  { name: "銀行・支店", href: "/master/banks", icon: Building },
   { name: "業種", href: "/master/industries", icon: Factory },
   { name: "売上項目", href: "/master/sales-items", icon: Tag },
   { name: "取引先", href: "/master/partners", icon: Handshake },
