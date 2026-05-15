@@ -223,7 +223,8 @@ export default function ExpensesPage() {
           ? getTransactions(companyId, "EXPENSE", previousMonth)
           : Promise.resolve({ data: [] as TransactionWithRelations[], total: 0 }),
       ])
-      let filtered = result.data.filter((t) => t.classification === "TEMPORARY")
+      // 固定/変動/臨時 の区別なく全ての経費取引を表示
+      let filtered = result.data
       // 支払月BOX: scheduledDate の属する月でフィルタ
       if (filterMonth) {
         filtered = filtered.filter((t) => {
