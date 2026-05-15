@@ -482,11 +482,11 @@ export default function LoansPage() {
                 </div>
                 <div>
                   <span className="text-muted-foreground">ステータス</span>
-                  <p>
+                  <div className="mt-1">
                     <Badge variant={STATUS_VARIANTS[selectedLoan.status] || "outline"}>
                       {STATUS_LABELS[selectedLoan.status] || selectedLoan.status}
                     </Badge>
-                  </p>
+                  </div>
                 </div>
                 <div>
                   <span className="text-muted-foreground">実行日</span>

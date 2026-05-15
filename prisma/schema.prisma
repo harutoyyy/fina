@@ -161,6 +161,9 @@ model Company {
   recurringTemplates RecurringTemplate[]
   monthCloses     MonthClose[]
   reconciliationCheckpoints ReconciliationCheckpoint[]
+  financialReports FinancialReport[]
+  journalEntriesDr JournalEntry[] @relation("JournalEntryDrCompany")
+  journalEntriesCr JournalEntry[] @relation("JournalEntryCrCompany")
   industryMaster  IndustryMaster? @relation(fields: [industryMasterId], references: [id])
 
   @@schema("fina")
@@ -1285,6 +1288,91 @@ model CompanyGroupMember {
 // Phase 3-D: 売上項目メタマスタ
 // PDF P10: 売上項目（◯◯売上、対象会社チェック）
 // ============================================================
+
+// ============================================================
+// Phase 4: 仕訳帳（複式簿記の純粋仕訳）
+// 取り込み元: ダミーデータ_202505_202604.xlsx
+// xlsx 1行 = 1仕訳 (借方/貸方ペアを1レコードに保持)
+// ============================================================
+
+model JournalEntry {
+  id              String   @id @default(cuid())
+  voucherNo       Int      // 伝票No (xlsx 列1)
+  identifierFlag  Int      // 識別フラグ 2000/2100/2101/2110/2111 (xlsx 列0)
+  transactionDate DateTime // 取引日付
+
+  // 借方
+  drAccountKind   String?  // 借方勘定科目
+  drSubAccount    String?  // 借方補助科目
+  drCompanyId     String?  // Company FK (借方部門の会社)
+  drCompanyName   String?  // 借方部門 (会社名 raw text)
+  drTaxClass      String?  // 借方税区分
+  drAmount        BigInt   @default(0)
+  drTaxAmount     BigInt   @default(0)
+
+  // 貸方
+  crAccountKind   String?  // 貸方勘定科目
+  crSubAccount    String?  // 貸方補助科目
+  crCompanyId     String?  // Company FK (貸方部門の会社)
+  crCompanyName   String?  // 貸方部門
+  crTaxClass      String?  // 貸方税区分
+  crAmount        BigInt   @default(0)
+  crTaxAmount     BigInt   @default(0)
+
+  summary         String?  // 摘要 (xlsx 列16)
+  // メタ（xlsx 列17以降）
+  refNumber       String?  // 番号
+  voucherDueDate  DateTime? // 期日
+  voucherType     Int?     // タイプ
+  source          String?  // 生成元
+  memo            String?  // 仕訳メモ
+  tag1            Int?     // 付箋1
+  tag2            Int?     // 付箋2
+  adjustment      String?  // 調整
+
+  createdAt       DateTime @default(now())
+
+  drCompany       Company? @relation("JournalEntryDrCompany", fields: [drCompanyId], references: [id])
+  crCompany       Company? @relation("JournalEntryCrCompany", fields: [crCompanyId], references: [id])
+
+  @@index([voucherNo])
+  @@index([transactionDate])
+  @@index([drCompanyId])
+  @@index([crCompanyId])
+  @@index([identifierFlag])
+  @@schema("fina")
+  @@map("journal_entries_fina")
+}
+
+// ============================================================
+// Phase 4: 財務レポート（試算表/損益計算書/貸借対照表/製造原価）
+// 取り込み元: ダミーデータ企業_20260515.xlsx
+// ============================================================
+
+model FinancialReport {
+  id              String   @id @default(cuid())
+  companyId       String?  // 単一会社レポート。鳶/広告/全体合計の場合は null
+  reportType      String   // "TRIAL_BALANCE","INCOME_STATEMENT","BALANCE_SHEET","MANUFACTURING_COST"
+  scope           String   @default("SINGLE") // "SINGLE","INDUSTRY_TOTAL","ALL_TOTAL"
+  scopeLabel      String?  // "鳶 合計","広告 合計","全体 合計"
+  yearMonth       String   // "YYYY-MM"（月別データ）
+  fiscalYear      Int?     // 年間推移シート由来の場合の事業年度
+  accountName     String   // 勘定科目名（例: 売上高, [製]外注費）
+  section         String?  // [売上高] [売上原価] [販売管理費] etc.
+  amount          BigInt   // 金額（円、符号付き）
+  displayOrder    Int      @default(0)
+  isSubtotal      Boolean  @default(false) // 「売上高合計」「販売管理費計」など
+  isSection       Boolean  @default(false) // セクション見出し行
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  company         Company? @relation(fields: [companyId], references: [id])
+
+  @@index([companyId, reportType, yearMonth])
+  @@index([reportType, scope, yearMonth])
+  @@schema("fina")
+  @@map("financial_reports_fina")
+}
 
 model SalesItemMaster {
   id              String   @id @default(cuid())

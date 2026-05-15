@@ -30,6 +30,7 @@ import {
   Layers,
   GitMerge,
   Tag,
+  BarChart3,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Separator } from "@/components/ui/separator"
@@ -37,6 +38,8 @@ import { Separator } from "@/components/ui/separator"
 const navigation = [
   { name: "ダッシュボード", href: "/dashboard", icon: LayoutDashboard },
   { name: "資金繰り表", href: "/cashflow-table", icon: TableProperties },
+  { name: "財務レポート", href: "/reports", icon: BarChart3 },
+  { name: "仕訳帳", href: "/journal", icon: FileText },
 ]
 
 const inputNavigation = [
