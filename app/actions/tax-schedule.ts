@@ -261,9 +261,9 @@ export async function generateInterimTaxSchedules(params: {
         isPaid: false, // 未納分のみ再生成
       },
     })
-    for (const r of rows) {
-      await tx.taxPaymentSchedule.create({
-        data: {
+    if (rows.length > 0) {
+      await tx.taxPaymentSchedule.createMany({
+        data: rows.map((r) => ({
           companyId: params.companyId,
           taxType: params.taxType,
           fiscalYear: params.fiscalYear,
@@ -272,7 +272,7 @@ export async function generateInterimTaxSchedules(params: {
           scheduledAmount: r.scheduledAmount,
           basisAmount: r.basisAmount,
           calculationMethod: r.calculationMethod,
-        },
+        })),
       })
     }
   })

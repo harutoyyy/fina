@@ -112,13 +112,16 @@ export async function getTransactions(
   if (accountingMonth) where.accountingMonth = accountingMonth
   if (status) where.status = status
 
-  const total = await prisma.transaction.count({ where })
-  const transactions = await prisma.transaction.findMany({
-    where,
-    orderBy: [{ transactionDate: "desc" }, { createdAt: "desc" }],
-    include: transactionInclude,
-    ...(pagination ? { skip: (pagination.page - 1) * pagination.pageSize, take: pagination.pageSize } : {}),
-  })
+  // 並列化: count と findMany を1ラウンドトリップで
+  const [total, transactions] = await Promise.all([
+    prisma.transaction.count({ where }),
+    prisma.transaction.findMany({
+      where,
+      orderBy: [{ transactionDate: "desc" }, { createdAt: "desc" }],
+      include: transactionInclude,
+      ...(pagination ? { skip: (pagination.page - 1) * pagination.pageSize, take: pagination.pageSize } : {}),
+    }),
+  ])
 
   return { data: bigintToJson(transactions) as TransactionWithRelations[], total }
 }
@@ -160,11 +163,14 @@ export async function createTransaction(data: {
   }
 }) {
   const session = await requireSession()
-  const role = await getUserRole(session.user.id)
+  // 並列化: 役割確認と月締めチェック (独立)
+  const [role] = await Promise.all([
+    getUserRole(session.user.id),
+    ensureMonthOpen(data.companyId, data.accountingMonth),
+  ])
   if (role === "VIEWER") {
     throw new Error("閲覧者は経費を作成できません")
   }
-  await ensureMonthOpen(data.companyId, data.accountingMonth)
 
   const result = await prisma.transaction.create({
     data: {
@@ -253,12 +259,14 @@ export async function updateTransaction(
   }
 ) {
   const session = await requireSession()
-  const role = await getUserRole(session.user.id)
+  // 並列化: 役割確認と取引取得 (独立)
+  const [role, existing] = await Promise.all([
+    getUserRole(session.user.id),
+    prisma.transaction.findUnique({ where: { id } }),
+  ])
   if (role === "VIEWER") {
     throw new Error("閲覧者は経費を編集できません")
   }
-
-  const existing = await prisma.transaction.findUnique({ where: { id } })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Transaction not found")
   }
@@ -361,11 +369,11 @@ async function validateExpenseConfirmed(tx: { id: string; partnerId: string | nu
   if (!tx.partnerId) {
     throw new Error("確定には正規取引先の登録が必要です。仮取引先名を正規化してください")
   }
-  const details = await prisma.transactionDetail.findMany({
-    where: { transactionId: tx.id },
+  // count に置換: 中項目を持つ明細が1件でもあるか
+  const midCount = await prisma.transactionDetail.count({
+    where: { transactionId: tx.id, midId: { not: null } },
   })
-  const hasMid = details.length > 0 && details.some(d => d.midId !== null)
-  if (!hasMid) {
+  if (midCount === 0) {
     throw new Error("確定には勘定科目（中項目）が必要です")
   }
 }
@@ -374,20 +382,21 @@ async function validateSalesConfirmed(tx: { id: string; invoiceAmount: bigint | 
   if (role !== "ADMIN") {
     throw new Error("入金・控除確定は管理者のみ実行できます")
   }
-  const children = await prisma.transaction.findMany({
-    where: { parentId: tx.id },
-  })
-  const actualPayments = children.reduce((sum, c) => sum + c.amount, BigInt(0))
+  // 並列化 + aggregate に置換: findMany+reduce を sum 一発に
+  const [childrenAgg, deductionAgg] = await Promise.all([
+    prisma.transaction.aggregate({
+      where: { parentId: tx.id },
+      _sum: { amount: true },
+    }),
+    prisma.transactionDetail.aggregate({
+      where: { transactionId: tx.id, deductionCategoryId: { not: null } },
+      _sum: { amount: true },
+    }),
+  ])
+  const actualPayments = childrenAgg._sum.amount ?? BigInt(0)
   const invoiceAmount = tx.invoiceAmount || BigInt(0)
   const diff = invoiceAmount - actualPayments
-
-  const deductionDetails = await prisma.transactionDetail.findMany({
-    where: {
-      transactionId: tx.id,
-      deductionCategoryId: { not: null },
-    },
-  })
-  const deductionTotal = deductionDetails.reduce((sum, d) => sum + d.amount, BigInt(0))
+  const deductionTotal = deductionAgg._sum.amount ?? BigInt(0)
 
   if (diff !== deductionTotal) {
     throw new Error(`差額（${diff}）と控除合計（${deductionTotal}）が一致しません`)
@@ -404,24 +413,27 @@ async function validateCostConfirmed(tx: { id: string; recordedAmount: bigint | 
   if (role !== "ADMIN") {
     throw new Error("原価確定は管理者のみ実行できます")
   }
-  const children = await prisma.transaction.findMany({
-    where: { parentId: tx.id },
-  })
-  const unpaidChildren = children.filter(c => c.status !== "CONFIRMED")
-  if (unpaidChildren.length > 0) {
+  // 並列化 + count/aggregate に置換
+  const [unpaidCount, childrenAgg, deductionAgg] = await Promise.all([
+    prisma.transaction.count({
+      where: { parentId: tx.id, status: { not: "CONFIRMED" } },
+    }),
+    prisma.transaction.aggregate({
+      where: { parentId: tx.id },
+      _sum: { amount: true },
+    }),
+    prisma.transactionDetail.aggregate({
+      where: { transactionId: tx.id, deductionCategoryId: { not: null } },
+      _sum: { amount: true },
+    }),
+  ])
+  if (unpaidCount > 0) {
     throw new Error("分割支払中は確定できません（未確定の支払があります）")
   }
-  const actualPayments = children.reduce((sum, c) => sum + c.amount, BigInt(0))
+  const actualPayments = childrenAgg._sum.amount ?? BigInt(0)
   const recordedAmount = tx.recordedAmount || BigInt(0)
   const diff = recordedAmount - actualPayments
-
-  const deductionDetails = await prisma.transactionDetail.findMany({
-    where: {
-      transactionId: tx.id,
-      deductionCategoryId: { not: null },
-    },
-  })
-  const deductionTotal = deductionDetails.reduce((sum, d) => sum + d.amount, BigInt(0))
+  const deductionTotal = deductionAgg._sum.amount ?? BigInt(0)
 
   if (diff !== deductionTotal) {
     throw new Error(`差額（計上額−実支払: ${diff}）と控除合計（${deductionTotal}）が一致しません`)
@@ -434,13 +446,16 @@ export async function updateTransactionStatus(
   status: TransactionStatus
 ) {
   const session = await requireSession()
-  const role = await getUserRole(session.user.id)
+  // 並列化: 役割確認と取引取得 (独立)
+  const [role, existing] = await Promise.all([
+    getUserRole(session.user.id),
+    prisma.transaction.findUnique({ where: { id } }),
+  ])
 
   if (role === "VIEWER") {
     throw new Error("閲覧者はステータス変更できません")
   }
 
-  const existing = await prisma.transaction.findUnique({ where: { id } })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Transaction not found")
   }
@@ -515,12 +530,15 @@ export async function updateTransactionStatus(
 // T-03: 証憑なしOKフラグの設定（管理者のみ）
 export async function setEvidenceNotRequired(id: string, companyId: string, value: boolean) {
   const session = await requireSession()
-  const role = await getUserRole(session.user.id)
+  // 並列化: 役割確認と取引取得 (独立)
+  const [role, existing] = await Promise.all([
+    getUserRole(session.user.id),
+    prisma.transaction.findUnique({ where: { id } }),
+  ])
   if (role !== "ADMIN") {
     throw new Error("証憑なしOKの設定は管理者のみ実行できます")
   }
 
-  const existing = await prisma.transaction.findUnique({ where: { id } })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Transaction not found")
   }
@@ -552,15 +570,18 @@ export async function normalizePartner(
   registerBankAccount?: boolean // 仮口座を正式口座として登録するか
 ) {
   const session = await requireSession()
-  const role = await getUserRole(session.user.id)
+  // 並列化: 役割確認と取引取得 (独立)
+  const [role, existing] = await Promise.all([
+    getUserRole(session.user.id),
+    prisma.transaction.findUnique({
+      where: { id: transactionId },
+      include: { temporaryBankAccount: true },
+    }),
+  ])
   if (role !== "ADMIN") {
     throw new Error("取引先の正規化は管理者のみ実行できます")
   }
 
-  const existing = await prisma.transaction.findUnique({
-    where: { id: transactionId },
-    include: { temporaryBankAccount: true },
-  })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Transaction not found")
   }
@@ -635,12 +656,15 @@ export async function getTemporaryVendorTransactions(companyId: string) {
 
 export async function deleteTransaction(id: string, companyId: string) {
   const session = await requireSession()
-  const role = await getUserRole(session.user.id)
+  // 並列化: 役割確認と取引取得 (独立)
+  const [role, existing] = await Promise.all([
+    getUserRole(session.user.id),
+    prisma.transaction.findUnique({ where: { id } }),
+  ])
   if (role === "VIEWER") {
     throw new Error("閲覧者は経費を削除できません")
   }
 
-  const existing = await prisma.transaction.findUnique({ where: { id } })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Transaction not found")
   }
@@ -676,7 +700,7 @@ export async function upsertTransactionDetails(
     signMultiplier?: number
   }[]
 ) {
-  await requireSession()
+  const session = await requireSession()
 
   const tx = await prisma.transaction.findUnique({ where: { id: transactionId } })
   if (tx) {
@@ -693,30 +717,34 @@ export async function upsertTransactionDetails(
           throw new Error("月締め後は金額変更できません")
         }
       }
-      // 科目/摘要のみ更新 + 監査ログ記録
-      const session = await requireSession()
+      // 科目/摘要のみ更新 + 監査ログ記録 (N+1 を Promise.all で並列化)
+      const updates: Promise<unknown>[] = []
       for (let i = 0; i < details.length; i++) {
         const existing = existingDetails[i]
         if (existing) {
           const beforeDetail = { midId: existing.midId, subId: existing.subId, summary: existing.summary }
           const afterDetail = { midId: details[i].midId || null, subId: details[i].subId || null, summary: details[i].summary || null }
-          await prisma.transactionDetail.update({
-            where: { id: existing.id },
-            data: afterDetail,
-          })
-          // 変更があった場合のみログ記録
-          if (beforeDetail.midId !== afterDetail.midId || beforeDetail.subId !== afterDetail.subId || beforeDetail.summary !== afterDetail.summary) {
-            await createAuditLog({
-              tableName: "transaction_details_fina",
-              recordId: existing.id,
-              operation: "UPDATE_AFTER_CLOSE",
-              userId: session.user.id,
-              beforeData: beforeDetail as Record<string, unknown>,
-              afterData: afterDetail as Record<string, unknown>,
+          updates.push(
+            prisma.transactionDetail.update({
+              where: { id: existing.id },
+              data: afterDetail,
             })
+          )
+          if (beforeDetail.midId !== afterDetail.midId || beforeDetail.subId !== afterDetail.subId || beforeDetail.summary !== afterDetail.summary) {
+            updates.push(
+              createAuditLog({
+                tableName: "transaction_details_fina",
+                recordId: existing.id,
+                operation: "UPDATE_AFTER_CLOSE",
+                userId: session.user.id,
+                beforeData: beforeDetail as Record<string, unknown>,
+                afterData: afterDetail as Record<string, unknown>,
+              })
+            )
           }
         }
       }
+      await Promise.all(updates)
       revalidatePath("/expenses")
       revalidatePath("/sales")
       revalidatePath("/costs")
@@ -770,26 +798,23 @@ export async function upsertDeductionDetails(
     throw new Error("Transaction not found")
   }
 
-  await prisma.transactionDetail.deleteMany({
-    where: {
-      transactionId,
-      deductionCategoryId: { not: null },
-    },
-  })
-
-  const existingNonDeduction = await prisma.transactionDetail.findMany({
-    where: {
-      transactionId,
-      deductionCategoryId: null,
-    },
-    orderBy: { displayOrder: "asc" },
-  })
-  const startOrder = existingNonDeduction.length
+  // 並列化: 控除明細削除 + 非控除明細の件数取得（count）+ カテゴリ取得
+  const categoryIds = deductions.map((d) => d.deductionCategoryId)
+  const [, startOrder, categories] = await Promise.all([
+    prisma.transactionDetail.deleteMany({
+      where: { transactionId, deductionCategoryId: { not: null } },
+    }),
+    prisma.transactionDetail.count({
+      where: { transactionId, deductionCategoryId: null },
+    }),
+    categoryIds.length > 0
+      ? prisma.deductionCategory.findMany({
+          where: { id: { in: categoryIds } },
+        })
+      : Promise.resolve([] as Awaited<ReturnType<typeof prisma.deductionCategory.findMany>>),
+  ])
 
   if (deductions.length > 0) {
-    const categories = await prisma.deductionCategory.findMany({
-      where: { id: { in: deductions.map(d => d.deductionCategoryId) } },
-    })
     const catMap = new Map(categories.map(c => [c.id, c]))
 
     await prisma.transactionDetail.createMany({
@@ -831,7 +856,11 @@ export async function copyPreviousDeductions(
 ) {
   await requireSession()
 
-  const tx = await prisma.transaction.findUnique({ where: { id: transactionId } })
+  // select 絞り込み: 必要カラムのみ
+  const tx = await prisma.transaction.findUnique({
+    where: { id: transactionId },
+    select: { companyId: true, partnerId: true, type: true, accountingMonth: true },
+  })
   if (!tx || tx.companyId !== companyId) {
     throw new Error("Transaction not found")
   }
@@ -844,18 +873,21 @@ export async function copyPreviousDeductions(
       accountingMonth: { lt: tx.accountingMonth },
     },
     orderBy: { accountingMonth: "desc" },
+    select: { id: true },
   })
 
   if (!previousTx) {
     return { found: false, deductions: [] }
   }
 
+  // select 絞り込み: 必要カラムのみ
   const details = await prisma.transactionDetail.findMany({
     where: {
       transactionId: previousTx.id,
       deductionCategoryId: { not: null },
     },
     orderBy: { displayOrder: "asc" },
+    select: { deductionCategoryId: true, deductionSubType: true, summary: true },
   })
 
   if (details.length === 0) {

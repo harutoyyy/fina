@@ -85,9 +85,10 @@ export async function getInterGroupTransactions(params: {
     where.companyId = params.companyId
   }
 
-  // 全件取得し（金額<0 = 支払側のみ） category毎に絞り込む
+  // 支払側のみ取得（amount<0 を SQL where に押し込み、JS filter を排除）
   delete where.companyGroupLinked
-  const rows = await prisma.transaction.findMany({
+  where.amount = { lt: BigInt(0) }
+  const outgoingOnly = await prisma.transaction.findMany({
     where,
     orderBy: [{ transactionDate: "desc" }, { createdAt: "desc" }],
     include: {
@@ -103,22 +104,10 @@ export async function getInterGroupTransactions(params: {
     },
   })
 
-  const outgoingOnly = rows.filter((r) => r.amount < BigInt(0))
-
-  // 相手会社情報の解決
+  // 並列化: linkedTransaction と counterCompany 解決を1ラウンドトリップで
   const linkedIds = outgoingOnly
     .map((r) => r.linkedTransactionId)
     .filter((v): v is string => !!v)
-  const linkedRows = await prisma.transaction.findMany({
-    where: { id: { in: linkedIds } },
-    include: {
-      company: { select: { id: true, name: true, shortName: true } },
-      account: { select: { id: true, bankName: true, branchName: true } },
-    },
-  })
-  const linkedMap = new Map(linkedRows.map((l) => [l.id, l]))
-
-  // fundTransfer.counterCompanyId 経由のフォールバック解決
   const counterIds = Array.from(
     new Set(
       outgoingOnly
@@ -126,10 +115,30 @@ export async function getInterGroupTransactions(params: {
         .filter((v): v is string => !!v)
     )
   )
-  const counterCompanies = await prisma.company.findMany({
-    where: { id: { in: counterIds } },
-    select: { id: true, name: true, shortName: true },
-  })
+  const [linkedRows, counterCompanies] = await Promise.all([
+    linkedIds.length > 0
+      ? prisma.transaction.findMany({
+          where: { id: { in: linkedIds } },
+          // select 絞り込み: 必要カラムのみ
+          select: {
+            id: true,
+            company: { select: { id: true, name: true, shortName: true } },
+            account: { select: { id: true, bankName: true, branchName: true } },
+          },
+        })
+      : Promise.resolve([] as Array<{
+          id: string
+          company: { id: string; name: string; shortName: string | null } | null
+          account: { id: string; bankName: string | null; branchName: string | null } | null
+        }>),
+    counterIds.length > 0
+      ? prisma.company.findMany({
+          where: { id: { in: counterIds } },
+          select: { id: true, name: true, shortName: true },
+        })
+      : Promise.resolve([] as Array<{ id: string; name: string; shortName: string | null }>),
+  ])
+  const linkedMap = new Map(linkedRows.map((l) => [l.id, l]))
   const counterMap = new Map(counterCompanies.map((c) => [c.id, c]))
 
   return bigintToJson(
@@ -356,37 +365,49 @@ export async function updateInterGroupTransaction(
     if (data.amount !== undefined) {
       const amount = BigInt(data.amount)
       if (amount <= BigInt(0)) throw new Error("金額は正の数で入力してください")
-      await tx.transaction.update({
-        where: { id: payer.id },
-        data: { ...update, amount: -amount, amountUpdatedAt: new Date() },
-      })
-      await tx.transaction.update({
-        where: { id: payer.linkedTransactionId! },
-        data: { ...update, amount, amountUpdatedAt: new Date() },
-      })
+      // 並列化: 双方の transaction.update は独立、fundTransfer は別 PK
+      const updates: Promise<unknown>[] = [
+        tx.transaction.update({
+          where: { id: payer.id },
+          data: { ...update, amount: -amount, amountUpdatedAt: new Date() },
+        }),
+        tx.transaction.update({
+          where: { id: payer.linkedTransactionId! },
+          data: { ...update, amount, amountUpdatedAt: new Date() },
+        }),
+      ]
       if (payer.fundTransfer) {
-        await tx.fundTransfer.update({
-          where: { transactionId: payer.id },
-          data: {
-            amount,
-            transferDate: data.transactionDate
-              ? new Date(data.transactionDate)
-              : undefined,
-          },
-        })
+        updates.push(
+          tx.fundTransfer.update({
+            where: { transactionId: payer.id },
+            data: {
+              amount,
+              transferDate: data.transactionDate
+                ? new Date(data.transactionDate)
+                : undefined,
+            },
+          })
+        )
       }
+      await Promise.all(updates)
     } else {
-      await tx.transaction.update({ where: { id: payer.id }, data: update })
-      await tx.transaction.update({
-        where: { id: payer.linkedTransactionId! },
-        data: update,
-      })
+      // 並列化: 双方の transaction.update + fundTransfer.update は独立
+      const updates: Promise<unknown>[] = [
+        tx.transaction.update({ where: { id: payer.id }, data: update }),
+        tx.transaction.update({
+          where: { id: payer.linkedTransactionId! },
+          data: update,
+        }),
+      ]
       if (payer.fundTransfer && data.transactionDate) {
-        await tx.fundTransfer.update({
-          where: { transactionId: payer.id },
-          data: { transferDate: new Date(data.transactionDate) },
-        })
+        updates.push(
+          tx.fundTransfer.update({
+            where: { transactionId: payer.id },
+            data: { transferDate: new Date(data.transactionDate) },
+          })
+        )
       }
+      await Promise.all(updates)
     }
   })
 
@@ -407,14 +428,22 @@ export async function deleteInterGroupTransaction(payerTransactionId: string) {
 
   await prisma.$transaction(async (tx) => {
     if (payer.linkedTransactionId) {
-      await tx.fundTransfer.deleteMany({ where: { transactionId: payer.id } })
-      await tx.transaction.update({
-        where: { id: payer.linkedTransactionId },
-        data: { linkedTransactionId: null },
-      })
-      await tx.transaction.delete({ where: { id: payer.linkedTransactionId } })
+      // 並列化: fundTransfer 削除 と linkedTransactionId のリンク解除は独立
+      await Promise.all([
+        tx.fundTransfer.deleteMany({ where: { transactionId: payer.id } }),
+        tx.transaction.update({
+          where: { id: payer.linkedTransactionId },
+          data: { linkedTransactionId: null },
+        }),
+      ])
+      // 双方の transaction.delete は両方リンク解除済みなので並列実行可
+      await Promise.all([
+        tx.transaction.delete({ where: { id: payer.linkedTransactionId } }),
+        tx.transaction.delete({ where: { id: payer.id } }),
+      ])
+    } else {
+      await tx.transaction.delete({ where: { id: payer.id } })
     }
-    await tx.transaction.delete({ where: { id: payer.id } })
   })
 
   revalidatePath("/inter-group")
@@ -451,8 +480,8 @@ export async function copyPreviousMonthInterGroup(params: {
     return { copied: 0, prevMonth }
   }
 
-  // 当月の同日付に変換するため、日数オフセット (月初基準) を計算
-  let copied = 0
+  // 並列化: 取引コピーを Promise.all で同時実行（順序非依存）
+  const tasks: Promise<unknown>[] = []
   for (const s of sources as Array<{
     transactionDate?: string | null
     accountId: string
@@ -483,14 +512,15 @@ export async function copyPreviousMonthInterGroup(params: {
     }
 
     if (params.category === "sale") {
-      await createInterGroupSale(payload)
+      tasks.push(createInterGroupSale(payload))
     } else if (params.category === "expense") {
-      await createInterGroupExpense(payload)
+      tasks.push(createInterGroupExpense(payload))
     } else {
-      await createInterGroupTransaction(payload)
+      tasks.push(createInterGroupTransaction(payload))
     }
-    copied++
   }
+  await Promise.all(tasks)
+  const copied = tasks.length
 
   return { copied, prevMonth }
 }
@@ -500,6 +530,7 @@ export async function copyPreviousMonthInterGroup(params: {
 // ============================================================
 export async function getGroupCompaniesFor(companyId: string) {
   await requireSession()
+  // 1クエリ目で groupIds を取得 (依存あり)
   const memberships = await prisma.companyGroupMember.findMany({
     where: { companyId },
     select: { groupId: true },
@@ -507,11 +538,14 @@ export async function getGroupCompaniesFor(companyId: string) {
   const groupIds = memberships.map((m) => m.groupId)
   if (groupIds.length === 0) return []
 
+  // 2クエリ目で peer companies を1回で取得（peerIds 中間 findMany を集約）
   const peers = await prisma.companyGroupMember.findMany({
     where: { groupId: { in: groupIds }, companyId: { not: companyId } },
     select: { companyId: true },
+    distinct: ["companyId"],
   })
-  const peerIds = Array.from(new Set(peers.map((p) => p.companyId)))
+  const peerIds = peers.map((p) => p.companyId)
+  if (peerIds.length === 0) return []
 
   return prisma.company.findMany({
     where: { id: { in: peerIds }, status: { not: "LIQUIDATING" } },

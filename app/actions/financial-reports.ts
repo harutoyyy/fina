@@ -101,9 +101,20 @@ export async function getTrialBalance(params: {
     if (scopeLabel) where.scopeLabel = scopeLabel
   }
 
+  // 戻り値で参照するカラムのみ取得して I/O を削減
   const records = await prisma.financialReport.findMany({
     where,
     orderBy: [{ displayOrder: "asc" }, { accountName: "asc" }],
+    select: {
+      id: true,
+      accountName: true,
+      section: true,
+      amount: true,
+      displayOrder: true,
+      isSubtotal: true,
+      isSection: true,
+      notes: true,
+    },
   })
 
   return {
@@ -166,12 +177,22 @@ export async function getYearlyReport(params: {
 
   // fiscalYear が DB に格納されていれば優先する（同月でも年度違いを区別するため）
   // ただし NULL の場合があるため OR で吸収する
+  // 集約に必要なカラムのみ select で取得（最大 1,200 行 × 不要列を回避）
   const records = await prisma.financialReport.findMany({
     where: {
       ...where,
       OR: [{ fiscalYear }, { fiscalYear: null }],
     },
     orderBy: [{ displayOrder: "asc" }, { accountName: "asc" }],
+    select: {
+      accountName: true,
+      section: true,
+      displayOrder: true,
+      isSubtotal: true,
+      isSection: true,
+      yearMonth: true,
+      amount: true,
+    },
   })
 
   // 勘定科目ごとに集約

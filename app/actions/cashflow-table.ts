@@ -166,26 +166,69 @@ export async function getCashFlowTable(
   yearMonth: string
 ): Promise<CashFlowTableData> {
   await requireSession()
-  await verifyCompanyAccess(companyId)
 
-  const transactions = await prisma.transaction.findMany({
-    where: {
-      companyId,
-      accountId,
-      accountingMonth: yearMonth,
-    },
-    orderBy: [{ displayOrder: "asc" }, { transactionDate: "asc" }],
-    include: {
-      partner: { select: { id: true, name: true } },
-      details: {
-        orderBy: { displayOrder: "asc" },
-        include: {
-          mid: { select: { id: true, name: true } },
-          sub: { select: { id: true, name: true } },
+  // 並列化: 会社存在確認 / 取引一覧 / 月初残高 / 突合チェックポイント を1ラウンドトリップで
+  const [company, transactions, monthlyBalance, checkpoints] = await Promise.all([
+    prisma.company.findUnique({ where: { id: companyId }, select: { id: true } }),
+    prisma.transaction.findMany({
+      where: {
+        companyId,
+        accountId,
+        accountingMonth: yearMonth,
+      },
+      orderBy: [{ displayOrder: "asc" }, { transactionDate: "asc" }],
+      // include を必要フィールドだけの select に絞る (BigInt列も明示)
+      select: {
+        id: true,
+        transactionDate: true,
+        scheduledDate: true,
+        type: true,
+        classification: true,
+        status: true,
+        amount: true,
+        displayOrder: true,
+        updatedAt: true,
+        createdAt: true,
+        estimatedAmount: true,
+        actualAmount: true,
+        invoiceAmount: true,
+        recordedAmount: true,
+        transferAmount: true,
+        paymentMethod: true,
+        linkedTransactionId: true,
+        summary: true,
+        temporaryVendorName: true,
+        partner: { select: { id: true, name: true } },
+        details: {
+          orderBy: { displayOrder: "asc" },
+          select: {
+            id: true,
+            midId: true,
+            subId: true,
+            amount: true,
+            summary: true,
+            displayOrder: true,
+            mid: { select: { id: true, name: true } },
+            sub: { select: { id: true, name: true } },
+          },
         },
       },
-    },
-  })
+    }),
+    prisma.monthlyBalance.findUnique({
+      where: {
+        accountId_yearMonth: { accountId, yearMonth },
+      },
+      select: { openingBalance: true },
+    }),
+    prisma.reconciliationCheckpoint.findMany({
+      where: { companyId, accountId, yearMonth },
+      orderBy: { checkpointDate: "asc" },
+    }),
+  ])
+
+  if (!company) {
+    throw new Error("Company not found")
+  }
 
   // 同日同時ルール: 同一日付内では PaymentMethod 優先度で並べ替える。
   // displayOrder が手動設定されている取引（>0）はその順序を尊重し、
@@ -199,18 +242,6 @@ export async function getCashFlowTable(
     if (prioDiff !== 0) return prioDiff
     return a.createdAt.getTime() - b.createdAt.getTime()
   })
-
-  const [monthlyBalance, checkpoints] = await Promise.all([
-    prisma.monthlyBalance.findUnique({
-      where: {
-        accountId_yearMonth: { accountId, yearMonth },
-      },
-    }),
-    prisma.reconciliationCheckpoint.findMany({
-      where: { companyId, accountId, yearMonth },
-      orderBy: { checkpointDate: "asc" },
-    }),
-  ])
 
   let openingBalance: bigint
   if (monthlyBalance) {

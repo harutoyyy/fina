@@ -164,6 +164,19 @@ export async function generateCashFlowReport(
     throw new Error("帳票作成には1件以上の取引を選択してください")
   }
 
+  // buildAccountInfo / buildPartnerAccountInfo / buildCompanyHeader が
+  // 参照するカラムのみ select で取得する
+  // - partner.bankAccounts は isActive=true のもののみを SQL で絞り込み（先頭1件で十分）
+  const accountSelect = {
+    bankName: true,
+    bankCode: true,
+    branchName: true,
+    branchCode: true,
+    accountType: true,
+    accountNumber: true,
+    accountHolder: true,
+  } as const
+
   const [company, txs] = await Promise.all([
     prisma.company.findUnique({
       where: { id: companyId },
@@ -183,10 +196,37 @@ export async function generateCashFlowReport(
     }),
     prisma.transaction.findMany({
       where: { id: { in: transactionIds }, companyId },
-      include: {
-        account: true,
-        partner: { include: { bankAccounts: true } },
-        fundTransfer: { include: { toAccount: true } },
+      select: {
+        id: true,
+        type: true,
+        paymentMethod: true,
+        amount: true,
+        transactionDate: true,
+        scheduledDate: true,
+        summary: true,
+        temporaryVendorName: true,
+        account: { select: accountSelect },
+        partner: {
+          select: {
+            name: true,
+            bankAccounts: {
+              where: { isActive: true },
+              take: 1,
+              select: {
+                bankCode: true,
+                branchCode: true,
+                accountType: true,
+                accountNumber: true,
+                accountHolder: true,
+              },
+            },
+          },
+        },
+        fundTransfer: {
+          select: {
+            toAccount: { select: accountSelect },
+          },
+        },
       },
       orderBy: [{ scheduledDate: "asc" }, { displayOrder: "asc" }],
     }),
@@ -219,7 +259,8 @@ export async function generateCashFlowReport(
   const rows: ReportRow[] = txs.map((t) => {
     const abs = t.amount < BigInt(0) ? -t.amount : t.amount
     totalAmount += abs
-    const partnerBank = t.partner?.bankAccounts.find((b) => b.isActive) ?? null
+    // bankAccounts は select 側で isActive=true、take:1 で絞り込み済み
+    const partnerBank = t.partner?.bankAccounts[0] ?? null
     return {
       id: t.id,
       date: (t.transactionDate ?? t.scheduledDate)?.toISOString().split("T")[0] ?? null,

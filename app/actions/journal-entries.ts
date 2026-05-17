@@ -130,6 +130,10 @@ export async function getJournalEntries(
   const safePage = page < 1 ? 1 : Math.floor(page)
   const safePageSize = pageSize < 1 ? DEFAULT_PAGE_SIZE : Math.min(Math.floor(pageSize), 500)
 
+  // 並列実行: count + findMany
+  // - SerializableJournalEntry が要求するカラムのみ select で取得（不要な createdAt 等を除外）
+  // - drCompany / crCompany は shortName のみ必要（include だと Company 全列を読んでしまうので select で絞る）
+  // - totalDr/totalCr はページ範囲合計（フッタ「当ページ 借方合計」表記）なので JS 集計を維持
   const [total, records] = await Promise.all([
     prisma.journalEntry.count({ where }),
     prisma.journalEntry.findMany({
@@ -140,9 +144,36 @@ export async function getJournalEntries(
       ],
       skip: (safePage - 1) * safePageSize,
       take: safePageSize,
-      include: {
-        drCompany: { select: { id: true, name: true, shortName: true } },
-        crCompany: { select: { id: true, name: true, shortName: true } },
+      select: {
+        id: true,
+        voucherNo: true,
+        identifierFlag: true,
+        transactionDate: true,
+        drAccountKind: true,
+        drSubAccount: true,
+        drCompanyId: true,
+        drCompanyName: true,
+        drTaxClass: true,
+        drAmount: true,
+        drTaxAmount: true,
+        crAccountKind: true,
+        crSubAccount: true,
+        crCompanyId: true,
+        crCompanyName: true,
+        crTaxClass: true,
+        crAmount: true,
+        crTaxAmount: true,
+        summary: true,
+        refNumber: true,
+        voucherDueDate: true,
+        voucherType: true,
+        source: true,
+        memo: true,
+        tag1: true,
+        tag2: true,
+        adjustment: true,
+        drCompany: { select: { shortName: true } },
+        crCompany: { select: { shortName: true } },
       },
     }),
   ])

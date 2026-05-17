@@ -55,13 +55,42 @@ export async function createLease(data: {
 }) {
   await requireSession()
 
-  const lease = await prisma.leaseContract.create({
+  // ネスト書き込みで Contract + Schedule を 1 トランザクションで作成
+  const monthlyAmount = BigInt(data.monthlyAmount)
+  const startDate = new Date(data.startDate)
+  const paymentDay = data.paymentDay || startDate.getDate()
+
+  const scheduleItems: Array<{
+    paymentNumber: number
+    dueDate: Date
+    amount: bigint
+    isPaid: boolean
+  }> = []
+  if (data.totalPayments && data.totalPayments > 0) {
+    for (let i = 0; i < data.totalPayments; i++) {
+      const dueDate = new Date(startDate.getFullYear(), startDate.getMonth() + i, paymentDay)
+      if (paymentDay > 28) {
+        const lastDay = new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, 0).getDate()
+        if (paymentDay > lastDay) {
+          dueDate.setDate(lastDay)
+        }
+      }
+      scheduleItems.push({
+        paymentNumber: i + 1,
+        dueDate,
+        amount: monthlyAmount,
+        isPaid: false,
+      })
+    }
+  }
+
+  const result = await prisma.leaseContract.create({
     data: {
       companyId: data.companyId,
       partnerId: data.partnerId || undefined,
       contractName: data.contractName,
-      monthlyAmount: BigInt(data.monthlyAmount),
-      startDate: new Date(data.startDate),
+      monthlyAmount,
+      startDate,
       endDate: data.endDate ? new Date(data.endDate) : undefined,
       totalPayments: data.totalPayments || undefined,
       paymentDay: data.paymentDay || undefined,
@@ -73,40 +102,14 @@ export async function createLease(data: {
       assetCategory: data.assetCategory || "OTHER",
       vehicleModel: data.vehicleModel || undefined,
       vehicleNumber: data.vehicleNumber || undefined,
+      ...(scheduleItems.length > 0
+        ? {
+            schedules: {
+              create: scheduleItems,
+            },
+          }
+        : {}),
     },
-  })
-
-  if (data.totalPayments && data.totalPayments > 0) {
-    const monthlyAmount = BigInt(data.monthlyAmount)
-    const paymentDay = data.paymentDay || new Date(data.startDate).getDate()
-    const startDate = new Date(data.startDate)
-
-    const schedules = []
-    for (let i = 0; i < data.totalPayments; i++) {
-      const dueDate = new Date(startDate.getFullYear(), startDate.getMonth() + i, paymentDay)
-      if (paymentDay > 28) {
-        const lastDay = new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, 0).getDate()
-        if (paymentDay > lastDay) {
-          dueDate.setDate(lastDay)
-        }
-      }
-
-      schedules.push({
-        contractId: lease.id,
-        paymentNumber: i + 1,
-        dueDate,
-        amount: monthlyAmount,
-        isPaid: false,
-      })
-    }
-
-    if (schedules.length > 0) {
-      await prisma.leaseSchedule.createMany({ data: schedules })
-    }
-  }
-
-  const result = await prisma.leaseContract.findUnique({
-    where: { id: lease.id },
     include: {
       schedules: {
         orderBy: { paymentNumber: "asc" },
@@ -142,7 +145,10 @@ export async function updateLease(
 ) {
   await requireSession()
 
-  const existing = await prisma.leaseContract.findUnique({ where: { id } })
+  const existing = await prisma.leaseContract.findUnique({
+    where: { id },
+    select: { companyId: true },
+  })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("LeaseContract not found")
   }
@@ -182,7 +188,10 @@ export async function updateLease(
 export async function deleteLease(id: string, companyId: string) {
   await requireSession()
 
-  const existing = await prisma.leaseContract.findUnique({ where: { id } })
+  const existing = await prisma.leaseContract.findUnique({
+    where: { id },
+    select: { companyId: true },
+  })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("LeaseContract not found")
   }
@@ -194,7 +203,16 @@ export async function deleteLease(id: string, companyId: string) {
 export async function regenerateLeaseSchedule(id: string, companyId: string) {
   await requireSession()
 
-  const contract = await prisma.leaseContract.findUnique({ where: { id } })
+  // 契約取得と既存スケジュール削除を並列実行 + 支払済件数を count で取得 (JS array 不要)
+  const [contract, , paidCount] = await Promise.all([
+    prisma.leaseContract.findUnique({ where: { id } }),
+    prisma.leaseSchedule.deleteMany({
+      where: { contractId: id, isPaid: false },
+    }),
+    prisma.leaseSchedule.count({
+      where: { contractId: id, isPaid: true },
+    }),
+  ])
   if (!contract || contract.companyId !== companyId) {
     throw new Error("LeaseContract not found")
   }
@@ -203,17 +221,6 @@ export async function regenerateLeaseSchedule(id: string, companyId: string) {
   const startDate = contract.startDate
   const paymentDay = contract.paymentDay ?? startDate.getDate()
   const monthlyAmount = contract.monthlyAmount
-
-  await prisma.leaseSchedule.deleteMany({
-    where: { contractId: id, isPaid: false },
-  })
-
-  const paidSchedules = await prisma.leaseSchedule.findMany({
-    where: { contractId: id, isPaid: true },
-    orderBy: { paymentNumber: "asc" },
-  })
-
-  const paidCount = paidSchedules.length
   const remaining = totalPayments - paidCount
 
   if (remaining > 0) {
@@ -285,19 +292,6 @@ export async function getVehicleLeaseMatrix(params: {
     throw new Error("月の形式が不正です")
   }
 
-  const leases = await prisma.leaseContract.findMany({
-    where: {
-      companyId: params.companyId,
-      assetCategory: "VEHICLE",
-    },
-    orderBy: { contractName: "asc" },
-    include: {
-      schedules: {
-        orderBy: { paymentNumber: "asc" },
-      },
-    },
-  })
-
   // 月リストを生成
   const months: string[] = []
   const [fy, fm] = params.fromMonth.split("-").map(Number)
@@ -309,18 +303,47 @@ export async function getVehicleLeaseMatrix(params: {
     m++
     if (m > 12) { m = 1; y++ }
   }
+  const monthIdx = new Map(months.map((mm, i) => [mm, i]))
 
+  // 期間に絞ったスケジュールのみ取得 (全件 → 範囲指定で削減)
+  const fromDate = new Date(fy, fm - 1, 1)
+  const toDate = new Date(ty, tm, 1) // exclusive
+
+  const leases = await prisma.leaseContract.findMany({
+    where: {
+      companyId: params.companyId,
+      assetCategory: "VEHICLE",
+    },
+    orderBy: { contractName: "asc" },
+    select: {
+      id: true,
+      contractName: true,
+      vehicleModel: true,
+      vehicleNumber: true,
+      monthlyAmount: true,
+      schedules: {
+        where: {
+          dueDate: { gte: fromDate, lt: toDate },
+        },
+        select: { dueDate: true, amount: true },
+      },
+    },
+  })
+
+  // 行ごとに 1パスで cells / 行合計 / 月合計を計算
+  const monthTotalsBig = new Array<bigint>(months.length).fill(BigInt(0))
   const rows = leases.map((lease) => {
-    const monthMap = new Map<string, bigint>()
+    const cellAmounts = new Array<bigint>(months.length).fill(BigInt(0))
+    let total = BigInt(0)
     for (const s of lease.schedules) {
       const ym = `${s.dueDate.getFullYear()}-${String(s.dueDate.getMonth() + 1).padStart(2, "0")}`
-      monthMap.set(ym, (monthMap.get(ym) ?? BigInt(0)) + s.amount)
+      const idx = monthIdx.get(ym)
+      if (idx === undefined) continue
+      cellAmounts[idx] += s.amount
+      total += s.amount
+      monthTotalsBig[idx] += s.amount
     }
-    const cells = months.map((ym) => monthMap.get(ym)?.toString() ?? null)
-    const total = months.reduce(
-      (acc, ym) => acc + (monthMap.get(ym) ?? BigInt(0)),
-      BigInt(0)
-    )
+    const cells = cellAmounts.map((v) => (v === BigInt(0) ? null : v.toString()))
     return {
       id: lease.id,
       contractName: lease.contractName,
@@ -332,15 +355,9 @@ export async function getVehicleLeaseMatrix(params: {
     }
   })
 
-  const monthTotals = months.map((ym, i) => {
-    return rows
-      .reduce((acc, r) => acc + (r.cells[i] ? BigInt(r.cells[i]!) : BigInt(0)), BigInt(0))
-      .toString()
-  })
-
   return {
     months,
     rows,
-    monthTotals,
+    monthTotals: monthTotalsBig.map((v) => v.toString()),
   }
 }

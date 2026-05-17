@@ -27,23 +27,26 @@ export async function getCompanyGroups() {
 
 export async function getCompanyGroupsWithCompanies() {
   await requireSession()
-  const groups = await prisma.companyGroup.findMany({
-    where: { isActive: true },
-    orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
-    include: { members: true },
-  })
-
-  const allCompanyIds = Array.from(new Set(groups.flatMap((g) => g.members.map((m) => m.companyId))))
-  const companies = await prisma.company.findMany({
-    where: { id: { in: allCompanyIds } },
-    select: {
-      id: true,
-      name: true,
-      shortName: true,
-      status: true,
-      industryMaster: { select: { name: true } },
-    },
-  })
+  // groups と companies を並列取得 (互いに依存しない)。
+  // companies は LIQUIDATING 以外の現役全社を一括取得しキャッシュ的に使うことで、
+  // 2回目のクエリ往復をなくしている。
+  const [groups, companies] = await Promise.all([
+    prisma.companyGroup.findMany({
+      where: { isActive: true },
+      orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+      include: { members: true },
+    }),
+    prisma.company.findMany({
+      where: { status: { not: "LIQUIDATING" } },
+      select: {
+        id: true,
+        name: true,
+        shortName: true,
+        status: true,
+        industryMaster: { select: { name: true } },
+      },
+    }),
+  ])
   const companyMap = new Map(companies.map((c) => [c.id, c]))
 
   return groups.map((g) => ({
@@ -119,18 +122,17 @@ export async function deleteCompanyGroup(id: string) {
 export async function setGroupMembers(groupId: string, companyIds: string[]) {
   await requireAdmin()
 
-  await prisma.$transaction(async (tx) => {
-    await tx.companyGroupMember.deleteMany({ where: { groupId } })
-    for (let i = 0; i < companyIds.length; i++) {
-      await tx.companyGroupMember.create({
-        data: {
-          groupId,
-          companyId: companyIds[i],
-          displayOrder: i,
-        },
-      })
-    }
-  })
+  // delete + createMany を1トランザクションでまとめて N+1 ループを排除
+  await prisma.$transaction([
+    prisma.companyGroupMember.deleteMany({ where: { groupId } }),
+    prisma.companyGroupMember.createMany({
+      data: companyIds.map((companyId, i) => ({
+        groupId,
+        companyId,
+        displayOrder: i,
+      })),
+    }),
+  ])
 
   revalidatePath("/master/company-groups")
   revalidatePath("/dashboard")
@@ -148,38 +150,48 @@ export async function getGroupDashboardSummary(params: {
     throw new Error("月の形式が不正です")
   }
 
-  const [groups, allCompanies] = await Promise.all([
+  // 4クエリすべてを1ラウンドトリップで並列実行
+  // (互いに依存しないので、4回シーケンシャル待機 → 1回まとめて await に短縮)
+  const [groups, allCompanies, balances, txAgg] = await Promise.all([
     prisma.companyGroup.findMany({
       where: { isActive: true },
       orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
-      include: { members: true },
+      select: {
+        id: true,
+        name: true,
+        shortName: true,
+        colorCode: true,
+        members: {
+          select: { companyId: true },
+          orderBy: { displayOrder: "asc" },
+        },
+      },
     }),
     prisma.company.findMany({
       where: { status: { not: "LIQUIDATING" } },
       select: { id: true, name: true, shortName: true },
       orderBy: { displayOrder: "asc" },
     }),
+    // 月次残高合計を会社ごとに集計
+    prisma.monthlyBalance.groupBy({
+      by: ["companyId"],
+      where: { yearMonth: params.yearMonth },
+      _sum: { closingBalance: true },
+    }),
+    // 当月入出金合計
+    prisma.transaction.groupBy({
+      by: ["companyId", "type"],
+      where: {
+        accountingMonth: params.yearMonth,
+        status: { not: "CANCELLED" },
+      },
+      _sum: { amount: true },
+    }),
   ])
 
-  // 月次残高合計を会社ごとに集計
-  const balances = await prisma.monthlyBalance.groupBy({
-    by: ["companyId"],
-    where: { yearMonth: params.yearMonth },
-    _sum: { closingBalance: true },
-  })
   const balanceMap = new Map(
     balances.map((b) => [b.companyId, b._sum.closingBalance ?? BigInt(0)])
   )
-
-  // 当月入出金合計
-  const txAgg = await prisma.transaction.groupBy({
-    by: ["companyId", "type"],
-    where: {
-      accountingMonth: params.yearMonth,
-      status: { not: "CANCELLED" },
-    },
-    _sum: { amount: true },
-  })
   type Totals = { income: bigint; expense: bigint }
   const totalsMap = new Map<string, Totals>()
   const ZERO = BigInt(0)

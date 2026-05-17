@@ -283,7 +283,10 @@ export async function updateLoan(
 ) {
   await requireSession()
 
-  const existing = await prisma.loanContract.findUnique({ where: { id } })
+  const existing = await prisma.loanContract.findUnique({
+    where: { id },
+    select: { companyId: true },
+  })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Loan contract not found")
   }
@@ -326,7 +329,10 @@ export async function updateLoan(
 export async function deleteLoan(id: string, companyId: string) {
   await requireSession()
 
-  const existing = await prisma.loanContract.findUnique({ where: { id } })
+  const existing = await prisma.loanContract.findUnique({
+    where: { id },
+    select: { companyId: true, status: true },
+  })
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Loan contract not found")
   }
@@ -347,37 +353,40 @@ export async function markLoanSchedulePaid(
 
   const schedule = await prisma.loanSchedule.findUnique({
     where: { id: scheduleId },
-    include: { contract: { select: { companyId: true, id: true } } },
+    select: {
+      id: true,
+      contract: { select: { id: true, companyId: true } },
+    },
   })
   if (!schedule || schedule.contract.companyId !== companyId) {
     throw new Error("Loan schedule not found")
   }
 
-  await prisma.loanSchedule.update({
-    where: { id: scheduleId },
-    data: {
-      isPaid: true,
-      transactionId: transactionId || undefined,
-    },
-  })
+  // 更新後の schedule を返り値で受け取り、最新の支払済み schedule を並列取得
+  const [updatedSchedule, latestPaid] = await Promise.all([
+    prisma.loanSchedule.update({
+      where: { id: scheduleId },
+      data: {
+        isPaid: true,
+        transactionId: transactionId || undefined,
+      },
+    }),
+    prisma.loanSchedule.findFirst({
+      where: { contractId: schedule.contract.id, isPaid: true },
+      orderBy: { paymentNumber: "desc" },
+      select: { remainingBalance: true },
+    }),
+  ])
 
-  const paidSchedules = await prisma.loanSchedule.findMany({
-    where: { contractId: schedule.contract.id, isPaid: true },
-    orderBy: { paymentNumber: "desc" },
-    take: 1,
-  })
-
-  if (paidSchedules.length > 0) {
+  if (latestPaid) {
     await prisma.loanContract.update({
       where: { id: schedule.contract.id },
-      data: { remainingBalance: paidSchedules[0].remainingBalance },
+      data: { remainingBalance: latestPaid.remainingBalance },
     })
   }
 
   revalidatePath("/loans")
-  return bigintToJson(
-    await prisma.loanSchedule.findUnique({ where: { id: scheduleId } })
-  )
+  return bigintToJson(updatedSchedule)
 }
 
 export async function regenerateSchedule(contractId: string, companyId: string) {
@@ -422,26 +431,27 @@ export async function regenerateSchedule(contractId: string, companyId: string) 
     principalAdjust: contract.principalAdjust,
   })
 
+  // 未払スケジュール削除 → 新規 createMany + 契約 remainingBalance 更新を並列化
   await prisma.loanSchedule.deleteMany({
     where: { contractId, isPaid: false },
   })
-
-  await prisma.loanSchedule.createMany({
-    data: newScheduleItems.map((s) => ({
-      contractId,
-      paymentNumber: paidCount + s.paymentNumber,
-      dueDate: s.dueDate,
-      principalAmount: s.principalAmount,
-      interestAmount: s.interestAmount,
-      totalAmount: s.totalAmount,
-      remainingBalance: s.remainingBalance,
-    })),
-  })
-
-  await prisma.loanContract.update({
-    where: { id: contractId },
-    data: { remainingBalance: currentBalance },
-  })
+  await Promise.all([
+    prisma.loanSchedule.createMany({
+      data: newScheduleItems.map((s) => ({
+        contractId,
+        paymentNumber: paidCount + s.paymentNumber,
+        dueDate: s.dueDate,
+        principalAmount: s.principalAmount,
+        interestAmount: s.interestAmount,
+        totalAmount: s.totalAmount,
+        remainingBalance: s.remainingBalance,
+      })),
+    }),
+    prisma.loanContract.update({
+      where: { id: contractId },
+      data: { remainingBalance: currentBalance },
+    }),
+  ])
 
   const updated = await prisma.loanContract.findUnique({
     where: { id: contractId },

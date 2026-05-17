@@ -100,21 +100,35 @@ export async function getCardStatements(params: {
   statementMonth?: string // "YYYY-MM"
 }) {
   await requireSession()
-  const cards = await prisma.creditCard.findMany({
-    where: { companyId: params.companyId },
-    select: { id: true },
-  })
-  const cardIds = cards.map((c) => c.id)
-  if (cardIds.length === 0) return []
 
-  const where: Record<string, unknown> = {
-    cardId: params.cardId ? params.cardId : { in: cardIds },
-  }
+  // 単一カード指定時: companyId 整合性を card 側で担保しつつ 1クエリで取得
+  const where: Record<string, unknown> = params.cardId
+    ? { cardId: params.cardId, card: { companyId: params.companyId } }
+    : { card: { companyId: params.companyId } }
   if (params.statementMonth) where.statementMonth = params.statementMonth
 
   const rows = await prisma.cardStatement.findMany({
     where,
-    include: { card: { select: { id: true, cardName: true, cardLast4: true } } },
+    select: {
+      id: true,
+      cardId: true,
+      statementMonth: true,
+      statementDate: true,
+      storeName: true,
+      amount: true,
+      category: true,
+      midId: true,
+      subId: true,
+      partnerId: true,
+      summary: true,
+      isPosted: true,
+      transactionId: true,
+      importBatchId: true,
+      rowHash: true,
+      createdAt: true,
+      updatedAt: true,
+      card: { select: { id: true, cardName: true, cardLast4: true } },
+    },
     orderBy: [{ statementDate: "desc" }],
   })
   return bigintToJson(rows) as Array<{
@@ -234,44 +248,76 @@ export async function importCardStatements(params: {
     batchId: batch.id,
   }
 
+  // 1. バリデーション & ハッシュ計算 (DB アクセスなし)
+  type Prepared = {
+    line: number
+    row: CardImportRow
+    hash: string
+  }
+  const prepared: Prepared[] = []
   for (let i = 0; i < params.rows.length; i++) {
     const row = params.rows[i]
     const line = i + 2
-    try {
-      if (!row.statementDate || isNaN(new Date(row.statementDate).getTime())) {
-        result.errors.push(`行${line}: 利用日の形式が不正です`)
-        continue
-      }
-      if (!row.storeName?.trim()) {
-        result.errors.push(`行${line}: 利用店名が空です`)
-        continue
-      }
-      const hash = rowHashOf(params.cardId, row)
-      const exists = await prisma.cardStatement.findFirst({
-        where: { cardId: params.cardId, rowHash: hash },
-        select: { id: true },
-      })
-      if (exists) {
-        result.skipped += 1
-        continue
-      }
-      await prisma.cardStatement.create({
-        data: {
-          cardId: params.cardId,
-          statementMonth: params.statementMonth,
-          statementDate: new Date(row.statementDate),
-          storeName: row.storeName.trim(),
-          amount: BigInt(Math.round(row.amount || 0)),
-          category: row.category?.trim() || null,
-          summary: row.summary?.trim() || null,
-          rowHash: hash,
-          importBatchId: batch.id,
-        },
-      })
-      result.created += 1
-    } catch (e) {
-      result.errors.push(`行${line}: ${e instanceof Error ? e.message : "不明なエラー"}`)
+    if (!row.statementDate || isNaN(new Date(row.statementDate).getTime())) {
+      result.errors.push(`行${line}: 利用日の形式が不正です`)
+      continue
     }
+    if (!row.storeName?.trim()) {
+      result.errors.push(`行${line}: 利用店名が空です`)
+      continue
+    }
+    prepared.push({ line, row, hash: rowHashOf(params.cardId, row) })
+  }
+
+  // 2. 既存ハッシュを 1クエリで取得 (N+1 除去)
+  let existingHashes = new Set<string>()
+  if (prepared.length > 0) {
+    const existing = await prisma.cardStatement.findMany({
+      where: {
+        cardId: params.cardId,
+        rowHash: { in: prepared.map((p) => p.hash) },
+      },
+      select: { rowHash: true },
+    })
+    existingHashes = new Set(existing.map((e) => e.rowHash).filter((h): h is string => !!h))
+  }
+
+  // 3. 新規行のみ createMany で一括作成
+  const toCreate: Array<{
+    cardId: string
+    statementMonth: string
+    statementDate: Date
+    storeName: string
+    amount: bigint
+    category: string | null
+    summary: string | null
+    rowHash: string
+    importBatchId: string
+  }> = []
+  for (const p of prepared) {
+    if (existingHashes.has(p.hash)) {
+      result.skipped += 1
+      continue
+    }
+    try {
+      toCreate.push({
+        cardId: params.cardId,
+        statementMonth: params.statementMonth,
+        statementDate: new Date(p.row.statementDate),
+        storeName: p.row.storeName.trim(),
+        amount: BigInt(Math.round(p.row.amount || 0)),
+        category: p.row.category?.trim() || null,
+        summary: p.row.summary?.trim() || null,
+        rowHash: p.hash,
+        importBatchId: batch.id,
+      })
+    } catch (e) {
+      result.errors.push(`行${p.line}: ${e instanceof Error ? e.message : "不明なエラー"}`)
+    }
+  }
+  if (toCreate.length > 0) {
+    const created = await prisma.cardStatement.createMany({ data: toCreate })
+    result.created = created.count
   }
 
   await prisma.importBatch.update({
@@ -300,15 +346,36 @@ export async function postCardStatementsToTransaction(params: {
 }) {
   await requireSession()
 
-  const card = await prisma.creditCard.findUnique({
-    where: { id: params.cardId },
-    include: { statements: { where: { statementMonth: params.statementMonth, isPosted: false } } },
-  })
+  // カード本体・対象明細・合計を並列取得 (合計は SQL aggregate で算出)
+  const [card, statements, agg] = await Promise.all([
+    prisma.creditCard.findUnique({
+      where: { id: params.cardId },
+      select: { id: true, cardName: true, paymentAccountId: true, companyId: true },
+    }),
+    prisma.cardStatement.findMany({
+      where: {
+        cardId: params.cardId,
+        statementMonth: params.statementMonth,
+        isPosted: false,
+      },
+      select: { id: true },
+    }),
+    prisma.cardStatement.aggregate({
+      where: {
+        cardId: params.cardId,
+        statementMonth: params.statementMonth,
+        isPosted: false,
+      },
+      _sum: { amount: true },
+    }),
+  ])
+
   if (!card) throw new Error("カードが見つかりません")
   if (!card.paymentAccountId) throw new Error("カードに引落口座が設定されていません")
-  if (card.statements.length === 0) throw new Error("転記対象の未転記明細がありません")
+  if (statements.length === 0) throw new Error("転記対象の未転記明細がありません")
 
-  const total = card.statements.reduce((sum, s) => sum + s.amount, BigInt(0))
+  const total = agg._sum.amount ?? BigInt(0)
+  const statementIds = statements.map((s) => s.id)
 
   const tx = await prisma.$transaction(async (tx) => {
     const transaction = await tx.transaction.create({
@@ -326,16 +393,14 @@ export async function postCardStatementsToTransaction(params: {
         summary: `${card.cardName} カード引落 ${params.statementMonth}`,
       },
     })
-    for (const s of card.statements) {
-      await tx.cardStatement.update({
-        where: { id: s.id },
-        data: { isPosted: true, transactionId: transaction.id },
-      })
-    }
+    await tx.cardStatement.updateMany({
+      where: { id: { in: statementIds } },
+      data: { isPosted: true, transactionId: transaction.id },
+    })
     return transaction
   })
 
   revalidatePath("/card-statements")
   revalidatePath("/cashflow-table")
-  return { transactionId: tx.id, total: total.toString(), count: card.statements.length }
+  return { transactionId: tx.id, total: total.toString(), count: statements.length }
 }
