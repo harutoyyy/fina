@@ -39,6 +39,11 @@ e2e/.auth/
 .~lock.*#
 *.xlsx
 *.pdf
+*.HEIC
+*.heic
+*.heif
+*.HEIF
+mp*-IMG_*
 経理システムのエイリアス
 .claude/worktrees/
 .claude/settings.local.json

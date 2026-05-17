@@ -10,8 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
-import { useCompany, isAllCompanies } from "@/contexts/company-context"
-import { AllCompaniesBanner } from "@/components/all-companies-banner"
+import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { getAccounts } from "@/app/actions/accounts"
 import { getPartners } from "@/app/actions/partners"
 import { getCategories } from "@/app/actions/categories"
@@ -104,7 +104,7 @@ export default function SalesPage() {
   }
 
   const loadData = useCallback(async () => {
-    if (!selectedCompany || isAllCompanies(selectedCompany)) return
+    if (!selectedCompany) return
     setLoading(true)
     try {
       const [accs, parts, cats, txnResult, closed] = await Promise.all([
@@ -324,25 +324,14 @@ export default function SalesPage() {
     return invoiceAmt - paidAmt
   }
 
-  if (isAllCompanies(selectedCompany)) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">売上入力</h1>
-          <p className="text-muted-foreground">全社合算モード</p>
-        </div>
-        <AllCompaniesBanner feature="売上入力" />
-      </div>
-    )
-  }
-
   if (!selectedCompany) {
     return (
       <div className="space-y-6">
-        <div>
+        <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight">売上入力</h1>
-          <p className="text-muted-foreground">会社を選択してください</p>
+          <CompanySwitcher />
         </div>
+        <p className="text-muted-foreground">会社を選択してください</p>
       </div>
     )
   }
@@ -433,9 +422,10 @@ export default function SalesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">売上入力</h1>
-          <p className="text-muted-foreground">売上（請求＋入金）の入力・管理を行います</p>
+          <p className="text-muted-foreground">{selectedCompany.name}: 売上（請求＋入金）の入力・管理</p>
         </div>
         <div className="flex items-center gap-2">
+          <CompanySwitcher />
           {selectedCompany && (
             <TransactionExcelImport
               mode="SALES"

@@ -8,21 +8,38 @@ import { TransactionType, PaymentMethod } from "@prisma/client"
 import { adjustForHoliday } from "@/lib/holidays"
 
 async function verifyCompanyAccess(companyId: string) {
-  const company = await prisma.company.findUnique({ where: { id: companyId } })
+  const company = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: { id: true },
+  })
   if (!company) {
     throw new Error("Company not found")
   }
   return company
 }
 
-export async function getRecurringTemplates(companyId: string) {
-  await requireSession()
-  await verifyCompanyAccess(companyId)
-
-  const templates = await prisma.recurringTemplate.findMany({
-    where: { companyId },
-    orderBy: { createdAt: "desc" },
+// デフォルト口座を取得（isMain 優先、なければアクティブな口座任意）
+// findFirst + OR で 1クエリに集約
+async function resolveDefaultAccountId(companyId: string): Promise<string | null> {
+  const accounts = await prisma.account.findMany({
+    where: { companyId, isActive: true },
+    select: { id: true, isMain: true },
+    orderBy: { isMain: "desc" }, // main を先頭
+    take: 1,
   })
+  return accounts[0]?.id ?? null
+}
+
+export async function getRecurringTemplates(companyId: string) {
+  // セッション・会社確認・テンプレート取得を並列実行
+  const [, , templates] = await Promise.all([
+    requireSession(),
+    verifyCompanyAccess(companyId),
+    prisma.recurringTemplate.findMany({
+      where: { companyId },
+      orderBy: { createdAt: "desc" },
+    }),
+  ])
 
   return bigintToJson(templates)
 }
@@ -48,8 +65,7 @@ export async function createRecurringTemplate(data: {
   summary?: string
   assigneeId?: string
 }) {
-  await requireSession()
-  await verifyCompanyAccess(data.companyId)
+  await Promise.all([requireSession(), verifyCompanyAccess(data.companyId)])
 
   const result = await prisma.recurringTemplate.create({
     data: {
@@ -104,10 +120,15 @@ export async function updateRecurringTemplate(
     isActive?: boolean
   }
 ) {
-  await requireSession()
-  await verifyCompanyAccess(companyId)
-
-  const existing = await prisma.recurringTemplate.findUnique({ where: { id } })
+  // セッション・会社確認・既存テンプレート取得を並列実行
+  const [, , existing] = await Promise.all([
+    requireSession(),
+    verifyCompanyAccess(companyId),
+    prisma.recurringTemplate.findUnique({
+      where: { id },
+      select: { companyId: true },
+    }),
+  ])
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Template not found")
   }
@@ -143,10 +164,14 @@ export async function updateRecurringTemplate(
 }
 
 export async function deleteRecurringTemplate(id: string, companyId: string) {
-  await requireSession()
-  await verifyCompanyAccess(companyId)
-
-  const existing = await prisma.recurringTemplate.findUnique({ where: { id } })
+  const [, , existing] = await Promise.all([
+    requireSession(),
+    verifyCompanyAccess(companyId),
+    prisma.recurringTemplate.findUnique({
+      where: { id },
+      select: { companyId: true },
+    }),
+  ])
   if (!existing || existing.companyId !== companyId) {
     throw new Error("Template not found")
   }
@@ -200,67 +225,103 @@ function getDueDate(yearMonth: string, dueDayRule: string, holidayAdjust?: strin
 }
 
 export async function generateRecurringTransactions(companyId: string, yearMonth: string) {
-  await requireSession()
-  await verifyCompanyAccess(companyId)
+  const [, , templates] = await Promise.all([
+    requireSession(),
+    verifyCompanyAccess(companyId),
+    prisma.recurringTemplate.findMany({
+      where: { companyId, isActive: true },
+    }),
+  ])
 
-  const [yearStr, monthStr] = yearMonth.split("-")
+  const [, monthStr] = yearMonth.split("-")
   const month = parseInt(monthStr)
+  const prevMonth = getPreviousMonth(yearMonth)
 
-  const templates = await prisma.recurringTemplate.findMany({
-    where: {
-      companyId,
-      isActive: true,
-    },
-  })
+  // 対象テンプレートのみ絞り込み
+  const eligible = templates.filter(
+    (t) =>
+      isTargetMonth(t.frequency, t.specificMonths, month) &&
+      !(t.lastGeneratedMonth && t.lastGeneratedMonth >= yearMonth)
+  )
+  if (eligible.length === 0) return []
+
+  // VARIABLE テンプレートの前月金額を一括取得 (N+1 排除)
+  const variableTemplateIds = eligible
+    .filter((t) => t.amountType === "VARIABLE")
+    .map((t) => t.id)
+
+  const prevTxByTemplate = new Map<string, bigint>()
+  if (variableTemplateIds.length > 0) {
+    const prevTxs = await prisma.transaction.findMany({
+      where: {
+        recurringTemplateId: { in: variableTemplateIds },
+        accountingMonth: prevMonth,
+      },
+      select: { recurringTemplateId: true, amount: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    })
+    for (const tx of prevTxs) {
+      if (tx.recurringTemplateId && !prevTxByTemplate.has(tx.recurringTemplateId)) {
+        prevTxByTemplate.set(tx.recurringTemplateId, tx.amount)
+      }
+    }
+  }
+
+  // フォールバック対象 (templateId 取れなかった VARIABLE) の前月取引を一括取得
+  const fallbackTargets = eligible.filter(
+    (t) =>
+      t.amountType === "VARIABLE" &&
+      !prevTxByTemplate.has(t.id) &&
+      (t.partnerId !== null)
+  )
+  const fallbackKey = (partnerId: string, type: TransactionType) => `${partnerId}|${type}`
+  const fallbackMap = new Map<string, bigint>()
+  if (fallbackTargets.length > 0) {
+    const partnerIds = Array.from(new Set(fallbackTargets.map((t) => t.partnerId!).filter(Boolean)))
+    const fallbackTxs = await prisma.transaction.findMany({
+      where: {
+        companyId,
+        accountingMonth: prevMonth,
+        partnerId: { in: partnerIds },
+      },
+      select: { partnerId: true, type: true, amount: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    })
+    for (const tx of fallbackTxs) {
+      if (!tx.partnerId) continue
+      const k = fallbackKey(tx.partnerId, tx.type)
+      if (!fallbackMap.has(k)) fallbackMap.set(k, tx.amount)
+    }
+  }
+
+  // accountId 未指定テンプレ用にデフォルト口座を1回だけ解決
+  const needsDefaultAccount = eligible.some((t) => !t.accountId)
+  const defaultAccountId = needsDefaultAccount ? await resolveDefaultAccountId(companyId) : null
 
   const results: { templateId: string; templateName: string; transactionId: string }[] = []
 
-  for (const template of templates) {
-    if (!isTargetMonth(template.frequency, template.specificMonths, month)) {
-      continue
-    }
-
-    if (template.lastGeneratedMonth && template.lastGeneratedMonth >= yearMonth) {
-      continue
-    }
-
+  for (const template of eligible) {
     let amount = BigInt(0)
     if (template.amountType === "FIXED" && template.fixedAmount) {
       amount = template.fixedAmount
     } else if (template.amountType === "VARIABLE") {
-      // recurringTemplateId ベースで前月の金額を参照（より正確）
-      const prevMonth = getPreviousMonth(yearMonth)
-      const prevTransaction = await prisma.transaction.findFirst({
-        where: {
-          recurringTemplateId: template.id,
-          accountingMonth: prevMonth,
-        },
-        orderBy: { createdAt: "desc" },
-      })
-      if (prevTransaction) {
-        // isDateException の前月トランザクションでも金額は通常通り参照（例外は次月に影響しない）
-        amount = prevTransaction.amount
-      } else {
-        // フォールバック: templateId未設定の既存データ向け
-        const fallback = await prisma.transaction.findFirst({
-          where: {
-            companyId,
-            accountingMonth: prevMonth,
-            partnerId: template.partnerId,
-            type: template.transactionType,
-          },
-          orderBy: { createdAt: "desc" },
-        })
-        if (fallback) amount = fallback.amount
+      const v = prevTxByTemplate.get(template.id)
+      if (v !== undefined) {
+        amount = v
+      } else if (template.partnerId) {
+        amount = fallbackMap.get(fallbackKey(template.partnerId, template.transactionType)) ?? BigInt(0)
       }
     }
 
     const dueDate = getDueDate(yearMonth, template.dueDayRule, template.holidayAdjust)
-
     const accountingMonth = applyMonthOffset(yearMonth, template.accountingMonthOffset || 0)
+
+    const accountId = template.accountId ?? defaultAccountId
+    if (!accountId) continue
 
     const transactionData: Record<string, unknown> = {
       companyId,
+      accountId,
       type: template.transactionType,
       status: "DRAFT",
       accountingMonth,
@@ -271,27 +332,7 @@ export async function generateRecurringTransactions(companyId: string, yearMonth
       paymentMethod: template.paymentMethod,
       recurringTemplateId: template.id,
     }
-
-    if (template.accountId) transactionData.accountId = template.accountId
     if (template.partnerId) transactionData.partnerId = template.partnerId
-
-    if (!template.accountId) {
-      const defaultAccount = await prisma.account.findFirst({
-        where: { companyId, isMain: true, isActive: true },
-      })
-      if (defaultAccount) {
-        transactionData.accountId = defaultAccount.id
-      } else {
-        const anyAccount = await prisma.account.findFirst({
-          where: { companyId, isActive: true },
-        })
-        if (anyAccount) {
-          transactionData.accountId = anyAccount.id
-        } else {
-          continue
-        }
-      }
-    }
 
     const transaction = await prisma.transaction.create({
       data: transactionData as {
@@ -309,23 +350,25 @@ export async function generateRecurringTransactions(companyId: string, yearMonth
       },
     })
 
-    if (template.midId) {
-      await prisma.transactionDetail.create({
-        data: {
-          transactionId: transaction.id,
-          midId: template.midId,
-          subId: template.subId || null,
-          amount,
-          summary: template.summary || template.name,
-          displayOrder: 0,
-        },
-      })
-    }
-
-    await prisma.recurringTemplate.update({
-      where: { id: template.id },
-      data: { lastGeneratedMonth: yearMonth },
-    })
+    // 子レコード作成・テンプレ更新を並列化
+    await Promise.all([
+      template.midId
+        ? prisma.transactionDetail.create({
+            data: {
+              transactionId: transaction.id,
+              midId: template.midId,
+              subId: template.subId || null,
+              amount,
+              summary: template.summary || template.name,
+              displayOrder: 0,
+            },
+          })
+        : Promise.resolve(),
+      prisma.recurringTemplate.update({
+        where: { id: template.id },
+        data: { lastGeneratedMonth: yearMonth },
+      }),
+    ])
 
     results.push({
       templateId: template.id,
@@ -362,15 +405,65 @@ function applyMonthOffset(yearMonth: string, offset: number): string {
 
 // 自動生成: lastGeneratedMonth から当月までの未生成月を全て埋める
 export async function autoGenerateRecurringTransactions(companyId: string) {
-  await requireSession()
-  await verifyCompanyAccess(companyId)
+  const [, , templates] = await Promise.all([
+    requireSession(),
+    verifyCompanyAccess(companyId),
+    prisma.recurringTemplate.findMany({ where: { companyId, isActive: true } }),
+  ])
 
   const now = new Date()
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
 
-  const templates = await prisma.recurringTemplate.findMany({
-    where: { companyId, isActive: true },
-  })
+  if (templates.length === 0) return []
+
+  // デフォルト口座を 1回だけ解決
+  const needsDefaultAccount = templates.some((t) => !t.accountId)
+  const defaultAccountId = needsDefaultAccount ? await resolveDefaultAccountId(companyId) : null
+
+  // VARIABLE テンプレートが必要とする全 (templateId, prevMonth) 過去取引を 1クエリで先取得
+  // 期間: 最古の startMonth - 1 から currentMonth - 1 まで
+  const variableTemplateIds = templates
+    .filter((t) => t.amountType === "VARIABLE")
+    .map((t) => t.id)
+
+  // 前月金額のキャッシュ: key=`${templateId}|${prevYearMonth}`
+  const prevAmountByKey = new Map<string, bigint>()
+  if (variableTemplateIds.length > 0) {
+    const prevTxs = await prisma.transaction.findMany({
+      where: {
+        recurringTemplateId: { in: variableTemplateIds },
+      },
+      select: { recurringTemplateId: true, accountingMonth: true, amount: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    })
+    for (const tx of prevTxs) {
+      if (!tx.recurringTemplateId) continue
+      const k = `${tx.recurringTemplateId}|${tx.accountingMonth}`
+      if (!prevAmountByKey.has(k)) prevAmountByKey.set(k, tx.amount)
+    }
+  }
+
+  // partner ベースのフォールバック取引も 1クエリで取得 (テンプレが partnerId 持つ VARIABLE のみ)
+  const partnerIds = Array.from(
+    new Set(
+      templates
+        .filter((t) => t.amountType === "VARIABLE" && t.partnerId)
+        .map((t) => t.partnerId!)
+    )
+  )
+  const fallbackByKey = new Map<string, bigint>() // key = partnerId|type|month
+  if (partnerIds.length > 0) {
+    const fallbackTxs = await prisma.transaction.findMany({
+      where: { companyId, partnerId: { in: partnerIds } },
+      select: { partnerId: true, type: true, accountingMonth: true, amount: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    })
+    for (const tx of fallbackTxs) {
+      if (!tx.partnerId) continue
+      const k = `${tx.partnerId}|${tx.type}|${tx.accountingMonth}`
+      if (!fallbackByKey.has(k)) fallbackByKey.set(k, tx.amount)
+    }
+  }
 
   const allResults: { templateId: string; templateName: string; transactionId: string; month: string }[] = []
 
@@ -380,65 +473,35 @@ export async function autoGenerateRecurringTransactions(companyId: string) {
     if (template.lastGeneratedMonth) {
       startMonth = applyMonthOffset(template.lastGeneratedMonth, 1)
     } else {
-      // テンプレート作成月から開始
       const created = template.createdAt
       startMonth = `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, "0")}`
     }
 
-    // startMonth から currentMonth まで全月をループ
     let targetMonth = startMonth
     while (targetMonth <= currentMonth) {
       const [, monthStr] = targetMonth.split("-")
       const month = parseInt(monthStr)
 
       if (isTargetMonth(template.frequency, template.specificMonths, month)) {
-        // 金額計算
         let amount = BigInt(0)
         if (template.amountType === "FIXED" && template.fixedAmount) {
           amount = template.fixedAmount
         } else if (template.amountType === "VARIABLE") {
           const prevMonth = getPreviousMonth(targetMonth)
-          const prevTransaction = await prisma.transaction.findFirst({
-            where: {
-              recurringTemplateId: template.id,
-              accountingMonth: prevMonth,
-            },
-            orderBy: { createdAt: "desc" },
-          })
-          if (prevTransaction) {
-            amount = prevTransaction.amount
-          } else {
-            const fallback = await prisma.transaction.findFirst({
-              where: {
-                companyId,
-                accountingMonth: prevMonth,
-                partnerId: template.partnerId,
-                type: template.transactionType,
-              },
-              orderBy: { createdAt: "desc" },
-            })
-            if (fallback) amount = fallback.amount
+          const v = prevAmountByKey.get(`${template.id}|${prevMonth}`)
+          if (v !== undefined) {
+            amount = v
+          } else if (template.partnerId) {
+            amount =
+              fallbackByKey.get(`${template.partnerId}|${template.transactionType}|${prevMonth}`) ??
+              BigInt(0)
           }
         }
 
         const dueDate = getDueDate(targetMonth, template.dueDayRule, template.holidayAdjust)
         const accountingMonth = applyMonthOffset(targetMonth, template.accountingMonthOffset || 0)
 
-        // 口座を解決
-        let accountId = template.accountId
-        if (!accountId) {
-          const defaultAccount = await prisma.account.findFirst({
-            where: { companyId, isMain: true, isActive: true },
-          })
-          if (defaultAccount) {
-            accountId = defaultAccount.id
-          } else {
-            const anyAccount = await prisma.account.findFirst({
-              where: { companyId, isActive: true },
-            })
-            if (anyAccount) accountId = anyAccount.id
-          }
-        }
+        const accountId = template.accountId ?? defaultAccountId
         if (!accountId) {
           targetMonth = applyMonthOffset(targetMonth, 1)
           continue
@@ -461,23 +524,28 @@ export async function autoGenerateRecurringTransactions(companyId: string) {
           },
         })
 
-        if (template.midId) {
-          await prisma.transactionDetail.create({
-            data: {
-              transactionId: transaction.id,
-              midId: template.midId,
-              subId: template.subId || null,
-              amount,
-              summary: template.summary || template.name,
-              displayOrder: 0,
-            },
-          })
-        }
+        // 生成した取引をキャッシュへ反映 → 後続月で前月参照に使える
+        const txKey = `${template.id}|${accountingMonth}`
+        if (!prevAmountByKey.has(txKey)) prevAmountByKey.set(txKey, amount)
 
-        await prisma.recurringTemplate.update({
-          where: { id: template.id },
-          data: { lastGeneratedMonth: targetMonth },
-        })
+        await Promise.all([
+          template.midId
+            ? prisma.transactionDetail.create({
+                data: {
+                  transactionId: transaction.id,
+                  midId: template.midId,
+                  subId: template.subId || null,
+                  amount,
+                  summary: template.summary || template.name,
+                  displayOrder: 0,
+                },
+              })
+            : Promise.resolve(),
+          prisma.recurringTemplate.update({
+            where: { id: template.id },
+            data: { lastGeneratedMonth: targetMonth },
+          }),
+        ])
 
         allResults.push({
           templateId: template.id,
@@ -502,19 +570,17 @@ export async function autoGenerateRecurringTransactions(companyId: string) {
 }
 
 export async function getExpenseTemplates(companyId: string) {
-  await requireSession()
-  await verifyCompanyAccess(companyId)
-
-  const templates = await prisma.recurringTemplate.findMany({
-    where: {
-      companyId,
-      transactionType: "EXPENSE",
-    },
-    include: {
-      company: false,
-    },
-    orderBy: { createdAt: "desc" },
-  })
+  const [, , templates] = await Promise.all([
+    requireSession(),
+    verifyCompanyAccess(companyId),
+    prisma.recurringTemplate.findMany({
+      where: {
+        companyId,
+        transactionType: "EXPENSE",
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+  ])
 
   return bigintToJson(templates)
 }

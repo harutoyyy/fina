@@ -9,19 +9,6 @@ type Company = {
   industryType: string | null
 }
 
-export const ALL_COMPANIES_ID = "__ALL__"
-
-export const ALL_COMPANIES_OPTION: Company = {
-  id: ALL_COMPANIES_ID,
-  name: "全社合算",
-  shortName: "全社",
-  industryType: null,
-}
-
-export function isAllCompanies(company: Company | null | undefined): boolean {
-  return company?.id === ALL_COMPANIES_ID
-}
-
 type CompanyContextType = {
   companies: Company[]
   selectedCompany: Company | null
@@ -46,15 +33,11 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         }
         setCompanies(data)
         const saved = localStorage.getItem("selectedCompanyId")
-        if (saved === ALL_COMPANIES_ID) {
-          setSelectedCompany(ALL_COMPANIES_OPTION)
-        } else {
-          const found = data.find((c: Company) => c.id === saved)
-          if (found) {
-            setSelectedCompany(found)
-          } else if (data.length > 0) {
-            setSelectedCompany(data[0])
-          }
+        const found = data.find((c: Company) => c.id === saved)
+        if (found) {
+          setSelectedCompany(found)
+        } else if (data.length > 0) {
+          setSelectedCompany(data[0])
         }
         setLoading(false)
       })

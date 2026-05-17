@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { useSearchParams } from "next/navigation"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -403,6 +404,7 @@ export default function SalaryPage() {
           <h1 className="text-2xl font-bold tracking-tight">給与入力</h1>
           <p className="text-muted-foreground">会社を選択してください</p>
         </div>
+        <CompanySwitcher />
       </div>
     )
   }
@@ -414,6 +416,7 @@ export default function SalaryPage() {
           <h1 className="text-2xl font-bold tracking-tight">給与入力</h1>
           <p className="text-muted-foreground">{selectedCompany.name} の給与・賞与を入力・管理します</p>
         </div>
+        <CompanySwitcher />
         <div className="flex items-center gap-2">
           <SalaryExcelImport companyId={selectedCompany.id} onComplete={() => loadEntries(selectedCompany.id)} />
           <Button onClick={openNewForm} disabled={payrollGroups.length === 0}>

@@ -6,8 +6,14 @@ import { revalidatePath } from "next/cache"
 import { bigintToJson } from "@/lib/format"
 
 async function verifyCompanyAccess(companyId: string) {
-  await requireSession()
-  const company = await prisma.company.findUnique({ where: { id: companyId } })
+  // セッションと会社存在を並列確認
+  const [, company] = await Promise.all([
+    requireSession(),
+    prisma.company.findUnique({
+      where: { id: companyId },
+      select: { id: true },
+    }),
+  ])
   if (!company) throw new Error("会社が見つかりません")
   return company
 }
@@ -68,14 +74,27 @@ export async function createCashWithdrawalBatch(data: {
 }
 
 export async function linkTransactionToBatch(batchId: string, transactionId: string) {
-  const batch = await getBatchWithCompany(batchId)
-  await verifyCompanyAccess(batch.companyId)
-
-  const tx = await prisma.transaction.findUnique({
-    where: { id: transactionId },
-    select: { companyId: true },
-  })
+  // batch / transaction / セッションを並列取得 (元: 直列3クエリ)
+  const [batch, tx] = await Promise.all([
+    prisma.cashWithdrawalBatch.findUnique({
+      where: { id: batchId },
+      select: { companyId: true },
+    }),
+    prisma.transaction.findUnique({
+      where: { id: transactionId },
+      select: { companyId: true },
+    }),
+    requireSession(),
+  ])
+  if (!batch) throw new Error("バッチが見つかりません")
   if (!tx || tx.companyId !== batch.companyId) throw new Error("取引が見つからないか、同一会社ではありません")
+
+  // 会社存在チェック (権限境界の維持・元実装の verifyCompanyAccess 相当)
+  const company = await prisma.company.findUnique({
+    where: { id: batch.companyId },
+    select: { id: true },
+  })
+  if (!company) throw new Error("会社が見つかりません")
 
   await prisma.transaction.update({
     where: { id: transactionId },
@@ -86,12 +105,12 @@ export async function linkTransactionToBatch(batchId: string, transactionId: str
 }
 
 export async function unlinkTransactionFromBatch(transactionId: string) {
+  await requireSession()
   const tx = await prisma.transaction.findUnique({
     where: { id: transactionId },
     select: { companyId: true },
   })
   if (!tx) throw new Error("取引が見つかりません")
-  await verifyCompanyAccess(tx.companyId)
 
   await prisma.transaction.update({
     where: { id: transactionId },
@@ -185,32 +204,40 @@ export async function suggestDenomination(amount: number) {
 }
 
 export async function confirmCashWithdrawalBatch(batchId: string) {
-  const batchMeta = await getBatchWithCompany(batchId)
-  await verifyCompanyAccess(batchMeta.companyId)
-  const session = await requireSession()
-
-  const batch = await prisma.cashWithdrawalBatch.findUnique({
-    where: { id: batchId },
-    include: {
-      linkedTransactions: true,
-      denominations: true,
-    },
-  })
+  // バッチ本体・子取引合計・金種合計・セッションを並列取得
+  // JS reduce → SQL aggregate
+  const [batch, session, txAgg, denomAgg] = await Promise.all([
+    prisma.cashWithdrawalBatch.findUnique({
+      where: { id: batchId },
+      select: { id: true, companyId: true, totalAmount: true },
+    }),
+    requireSession(),
+    prisma.transaction.aggregate({
+      where: { cashWithdrawalBatchId: batchId },
+      _sum: { amount: true },
+    }),
+    prisma.cashDenomination.aggregate({
+      where: { batchId },
+      _sum: { total: true },
+      _count: { _all: true },
+    }),
+  ])
   if (!batch) throw new Error("バッチが見つかりません")
 
-  const childTotal = batch.linkedTransactions.reduce(
-    (sum, tx) => sum + Number(tx.amount),
-    0
-  )
+  // 会社存在チェック (権限境界の維持)
+  const company = await prisma.company.findUnique({
+    where: { id: batch.companyId },
+    select: { id: true },
+  })
+  if (!company) throw new Error("会社が見つかりません")
+
+  const childTotal = Number(txAgg._sum.amount ?? BigInt(0))
   if (childTotal !== Number(batch.totalAmount)) {
     throw new Error(`引出金額 (${Number(batch.totalAmount).toLocaleString()}円) と用途明細合計 (${childTotal.toLocaleString()}円) が一致しません`)
   }
 
-  if (batch.denominations.length > 0) {
-    const denomTotal = batch.denominations.reduce(
-      (sum, d) => sum + Number(d.total),
-      0
-    )
+  if (denomAgg._count._all > 0) {
+    const denomTotal = Number(denomAgg._sum.total ?? BigInt(0))
     if (denomTotal !== Number(batch.totalAmount)) {
       throw new Error(`金種合計 (${denomTotal.toLocaleString()}円) と引出金額 (${Number(batch.totalAmount).toLocaleString()}円) が一致しません`)
     }
@@ -229,21 +256,25 @@ export async function confirmCashWithdrawalBatch(batchId: string) {
 }
 
 export async function deleteCashWithdrawalBatch(batchId: string) {
-  const batchMeta = await getBatchWithCompany(batchId)
-  await verifyCompanyAccess(batchMeta.companyId)
-
-  const batch = await prisma.cashWithdrawalBatch.findUnique({
-    where: { id: batchId },
-    select: { status: true },
-  })
+  // セッションとバッチ取得を並列化 (status 含めて1回で取得)
+  const [, batch] = await Promise.all([
+    requireSession(),
+    prisma.cashWithdrawalBatch.findUnique({
+      where: { id: batchId },
+      select: { companyId: true, status: true },
+    }),
+  ])
   if (!batch) throw new Error("バッチが見つかりません")
   if (batch.status === "CONFIRMED") throw new Error("確定済みバッチは削除できません")
 
-  await prisma.transaction.updateMany({
-    where: { cashWithdrawalBatchId: batchId },
-    data: { cashWithdrawalBatchId: null },
-  })
-  await prisma.cashDenomination.deleteMany({ where: { batchId } })
+  // 子レコードのクリーンアップを並列化
+  await Promise.all([
+    prisma.transaction.updateMany({
+      where: { cashWithdrawalBatchId: batchId },
+      data: { cashWithdrawalBatchId: null },
+    }),
+    prisma.cashDenomination.deleteMany({ where: { batchId } }),
+  ])
   await prisma.cashWithdrawalBatch.delete({ where: { id: batchId } })
 
   revalidatePath("/cash-withdrawal")

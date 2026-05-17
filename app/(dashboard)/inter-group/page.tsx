@@ -2,12 +2,17 @@
 
 import { useEffect, useState, useCallback } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import {
   getInterGroupTransactions,
   createInterGroupTransaction,
+  createInterGroupSale,
+  createInterGroupExpense,
   updateInterGroupTransaction,
   deleteInterGroupTransaction,
   getGroupCompaniesFor,
+  copyPreviousMonthInterGroup,
+  type InterGroupCategory,
 } from "@/app/actions/inter-group"
 import { getAccounts } from "@/app/actions/accounts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -36,8 +41,9 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Pencil, Trash2, ArrowRight } from "lucide-react"
+import { Plus, Pencil, Trash2, ArrowRight, Copy } from "lucide-react"
 import { formatYen } from "@/lib/format"
 
 type TransferRow = {
@@ -58,6 +64,7 @@ type TransferRow = {
     counterCompanyId: string | null
   } | null
   counterCompany: { id: string; name: string; shortName: string | null } | null
+  counterAccount: { id: string; bankName: string | null; branchName: string | null } | null
 }
 type PeerCompany = Awaited<ReturnType<typeof getGroupCompaniesFor>>[number]
 type AccountRow = Awaited<ReturnType<typeof getAccounts>>[number]
@@ -78,14 +85,38 @@ const initialForm = {
   classification: "",
 }
 
+const CATEGORY_META: Record<
+  InterGroupCategory,
+  { label: string; helper: string; tint: string }
+> = {
+  sale: {
+    label: "売上 / 原価",
+    helper: "支払会社で入力 → 受取会社へ売上として自動反映",
+    tint: "bg-emerald-50 dark:bg-emerald-950/30",
+  },
+  expense: {
+    label: "経費",
+    helper: "支払会社で入力 → 受取会社へ収益として自動反映 (固定/変動/臨時 区分対応)",
+    tint: "bg-amber-50 dark:bg-amber-950/30",
+  },
+  lending: {
+    label: "貸借",
+    helper: "資金移動。グループ間貸借として単独集計され、資金繰表ではグループ借入で+−表現",
+    tint: "bg-violet-50 dark:bg-violet-950/30",
+  },
+}
+
 export default function InterGroupPage() {
   const { selectedCompany, loading: companyLoading } = useCompany()
+  const [category, setCategory] = useState<InterGroupCategory>("sale")
   const [rows, setRows] = useState<TransferRow[]>([])
   const [peers, setPeers] = useState<PeerCompany[]>([])
   const [payerAccounts, setPayerAccounts] = useState<AccountRow[]>([])
   const [receiverAccounts, setReceiverAccounts] = useState<AccountRow[]>([])
   const [month, setMonth] = useState<string>(currentMonth())
   const [loading, setLoading] = useState(false)
+  const [copying, setCopying] = useState(false)
+  const [copyMsg, setCopyMsg] = useState<string | null>(null)
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<TransferRow | null>(null)
@@ -101,6 +132,7 @@ export default function InterGroupPage() {
         getInterGroupTransactions({
           companyId: selectedCompany.id,
           accountingMonth: month,
+          category,
         }),
         getGroupCompaniesFor(selectedCompany.id),
         getAccounts(selectedCompany.id),
@@ -111,7 +143,7 @@ export default function InterGroupPage() {
     } finally {
       setLoading(false)
     }
-  }, [selectedCompany, month])
+  }, [selectedCompany, month, category])
 
   useEffect(() => {
     load()
@@ -145,7 +177,7 @@ export default function InterGroupPage() {
     setForm({
       receiverCompanyId: r.counterCompany?.id ?? "",
       payerAccountId: r.accountId,
-      receiverAccountId: r.fundTransfer?.toAccount?.id ?? "",
+      receiverAccountId: r.counterAccount?.id ?? "",
       transactionDate: r.transactionDate
         ? new Date(r.transactionDate).toISOString().slice(0, 10)
         : "",
@@ -176,7 +208,7 @@ export default function InterGroupPage() {
         if (!form.payerAccountId) throw new Error("支払口座を選択してください")
         if (!form.receiverAccountId) throw new Error("受取口座を選択してください")
         if (!form.amount) throw new Error("金額を入力してください")
-        await createInterGroupTransaction({
+        const payload = {
           payerCompanyId: selectedCompany.id,
           payerAccountId: form.payerAccountId,
           receiverCompanyId: form.receiverCompanyId,
@@ -186,7 +218,10 @@ export default function InterGroupPage() {
           amount: form.amount,
           summary: form.summary || undefined,
           classification: form.classification || undefined,
-        })
+        }
+        if (category === "sale") await createInterGroupSale(payload)
+        else if (category === "expense") await createInterGroupExpense(payload)
+        else await createInterGroupTransaction(payload)
       }
       setDialogOpen(false)
       await load()
@@ -203,18 +238,43 @@ export default function InterGroupPage() {
     await load()
   }
 
+  const handleCopyPrev = async () => {
+    if (!selectedCompany) return
+    setCopying(true)
+    setCopyMsg(null)
+    try {
+      const res = await copyPreviousMonthInterGroup({
+        companyId: selectedCompany.id,
+        category,
+        targetMonth: month,
+      })
+      setCopyMsg(
+        res.copied > 0
+          ? `前月(${res.prevMonth})から ${res.copied} 件を当月にコピーしました`
+          : `前月(${res.prevMonth})にコピー対象データはありません`
+      )
+      await load()
+    } catch (e) {
+      setCopyMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCopying(false)
+    }
+  }
+
   if (companyLoading) return <div className="p-6">読み込み中...</div>
   if (!selectedCompany) return <div className="p-6">会社を選択してください</div>
 
+  const meta = CATEGORY_META[category]
+  const totalAmount = rows.reduce((acc, r) => acc + -BigInt(r.amount as unknown as string), BigInt(0))
+
   return (
     <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">グループ間入力</h1>
-          <p className="text-sm text-muted-foreground">
-            支払会社で入力した取引は、受取会社側に自動で反映されます。
-          </p>
+          <p className="text-sm text-muted-foreground">{meta.helper}</p>
         </div>
+        <CompanySwitcher />
         <div className="flex items-center gap-2">
           <Input
             type="month"
@@ -222,12 +282,27 @@ export default function InterGroupPage() {
             onChange={(e) => setMonth(e.target.value)}
             className="w-36"
           />
+          <Button
+            variant="outline"
+            onClick={handleCopyPrev}
+            disabled={copying || peers.length === 0}
+            title="前月分の同カテゴリ取引を当月にコピー（経費の固定/変動/臨時もそのまま）"
+          >
+            <Copy className="w-4 h-4 mr-1" />
+            前月コピー
+          </Button>
           <Button onClick={openCreate} disabled={peers.length === 0}>
             <Plus className="w-4 h-4 mr-1" />
             新規
           </Button>
         </div>
       </div>
+
+      {copyMsg && (
+        <div className="text-sm bg-blue-50 dark:bg-blue-950/30 text-blue-800 dark:text-blue-200 p-2 rounded border border-blue-200 dark:border-blue-800">
+          {copyMsg}
+        </div>
+      )}
 
       {peers.length === 0 && (
         <Card>
@@ -238,103 +313,138 @@ export default function InterGroupPage() {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            {selectedCompany.name} の支払 ({month})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="p-4 text-center text-sm text-muted-foreground">読み込み中...</div>
-          ) : rows.length === 0 ? (
-            <div className="p-4 text-center text-sm text-muted-foreground">
-              この月のグループ間取引はありません
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>実行日</TableHead>
-                  <TableHead>支払会社</TableHead>
-                  <TableHead></TableHead>
-                  <TableHead>受取会社</TableHead>
-                  <TableHead>支払口座</TableHead>
-                  <TableHead>受取口座</TableHead>
-                  <TableHead className="text-right">金額</TableHead>
-                  <TableHead>摘要</TableHead>
-                  <TableHead className="w-24"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((r) => {
-                  const absAmount = -BigInt(r.amount as unknown as string)
-                  return (
-                    <TableRow key={r.id}>
-                      <TableCell>
-                        {r.transactionDate
-                          ? new Date(r.transactionDate).toLocaleDateString("ja-JP")
-                          : "-"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">
-                          {r.company.shortName ?? r.company.name}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        <ArrowRight className="w-4 h-4" />
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {r.counterCompany?.shortName ??
-                            r.counterCompany?.name ??
-                            "-"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {r.fundTransfer?.fromAccount?.bankName ?? ""}
-                        {r.fundTransfer?.fromAccount?.branchName ?? ""}
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {r.fundTransfer?.toAccount?.bankName ?? ""}
-                        {r.fundTransfer?.toAccount?.branchName ?? ""}
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {formatYen(absAmount)}
-                      </TableCell>
-                      <TableCell className="text-sm">{r.summary ?? ""}</TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => openEdit(r)}
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleDelete(r)}
-                          >
-                            <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                          </Button>
-                        </div>
-                      </TableCell>
+      <Tabs value={category} onValueChange={(v) => setCategory(v as InterGroupCategory)}>
+        <TabsList>
+          <TabsTrigger value="sale">{CATEGORY_META.sale.label}</TabsTrigger>
+          <TabsTrigger value="expense">{CATEGORY_META.expense.label}</TabsTrigger>
+          <TabsTrigger value="lending">{CATEGORY_META.lending.label}</TabsTrigger>
+        </TabsList>
+        <TabsContent value={category}>
+          <Card className={meta.tint}>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>
+                  {selectedCompany.name} の {meta.label} ({month})
+                </span>
+                <Badge variant="outline" className="text-sm font-mono">
+                  合計 {formatYen(totalAmount)}
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="p-4 text-center text-sm text-muted-foreground">読み込み中...</div>
+              ) : rows.length === 0 ? (
+                <div className="p-4 text-center text-sm text-muted-foreground">
+                  この月の{meta.label}グループ間取引はありません
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>実行日</TableHead>
+                      <TableHead>支払会社</TableHead>
+                      <TableHead></TableHead>
+                      <TableHead>受取会社</TableHead>
+                      <TableHead>支払口座</TableHead>
+                      <TableHead>受取口座</TableHead>
+                      <TableHead className="text-right">金額</TableHead>
+                      {category === "expense" && <TableHead>区分</TableHead>}
+                      <TableHead>摘要</TableHead>
+                      <TableHead className="w-24"></TableHead>
                     </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+                  </TableHeader>
+                  <TableBody>
+                    {rows.map((r) => {
+                      const absAmount = -BigInt(r.amount as unknown as string)
+                      return (
+                        <TableRow key={r.id}>
+                          <TableCell>
+                            {r.transactionDate
+                              ? new Date(r.transactionDate).toLocaleDateString("ja-JP")
+                              : "-"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="secondary">
+                              {r.company.shortName ?? r.company.name}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            <ArrowRight className="w-4 h-4" />
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">
+                              {r.counterCompany?.shortName ??
+                                r.counterCompany?.name ??
+                                "-"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {r.account.bankName ?? ""}
+                            {r.account.branchName ?? ""}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {r.counterAccount?.bankName ?? ""}
+                            {r.counterAccount?.branchName ?? ""}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {formatYen(absAmount)}
+                          </TableCell>
+                          {category === "expense" && (
+                            <TableCell>
+                              {r.classification === "FIXED" && (
+                                <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-300">
+                                  固定
+                                </Badge>
+                              )}
+                              {r.classification === "VARIABLE" && (
+                                <Badge variant="outline" className="bg-green-100 text-green-800 border-green-300">
+                                  変動
+                                </Badge>
+                              )}
+                              {r.classification === "TEMPORARY" && (
+                                <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300">
+                                  臨時
+                                </Badge>
+                              )}
+                              {!r.classification && <span className="text-muted-foreground">-</span>}
+                            </TableCell>
+                          )}
+                          <TableCell className="text-sm">{r.summary ?? ""}</TableCell>
+                          <TableCell>
+                            <div className="flex gap-1">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => openEdit(r)}
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleDelete(r)}
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
-              {editing ? "グループ間取引を編集" : "グループ間取引を追加"}
+              {editing ? `${meta.label}を編集` : `${meta.label}を追加`}
             </DialogTitle>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4">

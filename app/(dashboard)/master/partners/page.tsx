@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { getPartners, createPartner, updatePartner, togglePartnerActive } from "@/app/actions/partners"
 import { getPartnerBankAccounts, createPartnerBankAccount, updatePartnerBankAccount, deletePartnerBankAccount } from "@/app/actions/partner-bank-accounts"
 import { getPartnerSites, createPartnerSite, updatePartnerSite, deletePartnerSite } from "@/app/actions/partner-sites"
@@ -230,6 +231,7 @@ export default function PartnersPage() {
           <h1 className="text-2xl font-bold tracking-tight">取引先管理</h1>
           <p className="text-muted-foreground">{selectedCompany.name} の取引先を管理します</p>
         </div>
+        <CompanySwitcher />
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => setShowInactive(!showInactive)}>
             {showInactive ? "有効のみ表示" : "無効も表示"}

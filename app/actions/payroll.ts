@@ -307,37 +307,44 @@ export async function upsertSalaryDeductions(
 ) {
   await requireSession()
 
-  const entry = await prisma.salaryEntry.findUnique({
-    where: { id: salaryEntryId },
-    include: { payrollGroup: { select: { companyId: true } } },
-  })
+  // 並列化: entry 検証 + 既存 deduction 削除（独立）。select で必要カラムのみ
+  const [entry] = await Promise.all([
+    prisma.salaryEntry.findUnique({
+      where: { id: salaryEntryId },
+      select: {
+        totalPayment: true,
+        payrollGroup: { select: { companyId: true } },
+      },
+    }),
+    prisma.salaryDeduction.deleteMany({ where: { salaryEntryId } }),
+  ])
   if (!entry || entry.payrollGroup.companyId !== companyId) {
     throw new Error("SalaryEntry not found")
-  }
-
-  await prisma.salaryDeduction.deleteMany({ where: { salaryEntryId } })
-
-  if (deductions.length > 0) {
-    await prisma.salaryDeduction.createMany({
-      data: deductions.map((d, i) => ({
-        salaryEntryId,
-        itemName: d.itemName,
-        amount: BigInt(d.amount),
-        midId: d.midId || null,
-        subId: d.subId || null,
-        contentRows: d.contentRows || undefined,
-        displayOrder: i,
-      })),
-    })
   }
 
   const totalDeduction = deductions.reduce((sum, d) => sum + BigInt(d.amount), BigInt(0))
   const netPayment = entry.totalPayment - totalDeduction
 
-  await prisma.salaryEntry.update({
-    where: { id: salaryEntryId },
-    data: { totalDeduction, netPayment },
-  })
+  // 並列化: createMany と salaryEntry.update は独立
+  await Promise.all([
+    deductions.length > 0
+      ? prisma.salaryDeduction.createMany({
+          data: deductions.map((d, i) => ({
+            salaryEntryId,
+            itemName: d.itemName,
+            amount: BigInt(d.amount),
+            midId: d.midId || null,
+            subId: d.subId || null,
+            contentRows: d.contentRows || undefined,
+            displayOrder: i,
+          })),
+        })
+      : Promise.resolve(),
+    prisma.salaryEntry.update({
+      where: { id: salaryEntryId },
+      data: { totalDeduction, netPayment },
+    }),
+  ])
 
   revalidatePath("/salary")
 }
@@ -355,22 +362,28 @@ export async function upsertPaymentDetails(
 ) {
   await requireSession()
 
-  const entry = await prisma.salaryEntry.findUnique({
-    where: { id: salaryEntryId },
-    include: { payrollGroup: { select: { companyId: true } } },
-  })
+  // 並列化: entry 検証 + 口座 ID 妥当性検証 + 既存 paymentDetail 削除
+  const accountIds = details.map((d) => d.accountId).filter(Boolean) as string[]
+  const uniqueAccountIds = Array.from(new Set(accountIds))
+  const [entry, validAccounts] = await Promise.all([
+    prisma.salaryEntry.findUnique({
+      where: { id: salaryEntryId },
+      include: { payrollGroup: { select: { companyId: true } } },
+    }),
+    uniqueAccountIds.length > 0
+      ? prisma.account.findMany({
+          where: { id: { in: uniqueAccountIds }, companyId },
+          select: { id: true },
+        })
+      : Promise.resolve([] as Array<{ id: string }>),
+  ])
   if (!entry || entry.payrollGroup.companyId !== companyId) {
     throw new Error("SalaryEntry not found")
   }
 
-  const accountIds = details.map(d => d.accountId).filter(Boolean) as string[]
-  if (accountIds.length > 0) {
-    const validAccounts = await prisma.account.findMany({
-      where: { id: { in: accountIds }, companyId },
-      select: { id: true },
-    })
-    const validIds = new Set(validAccounts.map(a => a.id))
-    for (const aid of accountIds) {
+  if (uniqueAccountIds.length > 0) {
+    const validIds = new Set(validAccounts.map((a) => a.id))
+    for (const aid of uniqueAccountIds) {
       if (!validIds.has(aid)) {
         throw new Error("Invalid account for this company")
       }
@@ -413,6 +426,7 @@ async function createReserveTransfer(
   accountingMonth: string,
   summary: string
 ) {
+  // 出金取引のみ先に作成（後続の linkedTransactionId 参照に必要）
   const outTx = await prisma.transaction.create({
     data: {
       companyId,
@@ -422,33 +436,38 @@ async function createReserveTransfer(
       amount: -amount,
       summary: summary + "（出金）",
     },
+    select: { id: true },
   })
 
-  const inTx = await prisma.transaction.create({
-    data: {
-      companyId,
-      accountId: toAccountId,
-      type: "TRANSFER",
-      accountingMonth,
-      amount,
-      summary: summary + "（入金）",
-      linkedTransactionId: outTx.id,
-    },
-  })
+  // 入金取引と fundTransfer 作成は outTx.id が分かれば並列実行可能
+  const [inTx] = await Promise.all([
+    prisma.transaction.create({
+      data: {
+        companyId,
+        accountId: toAccountId,
+        type: "TRANSFER",
+        accountingMonth,
+        amount,
+        summary: summary + "（入金）",
+        linkedTransactionId: outTx.id,
+      },
+      select: { id: true },
+    }),
+    prisma.fundTransfer.create({
+      data: {
+        transactionId: outTx.id,
+        fromAccountId,
+        toAccountId,
+        transferDate: new Date(),
+        amount,
+      },
+    }),
+  ])
 
+  // 出金 -> 入金 のリンク更新は inTx.id を待つ必要あり
   await prisma.transaction.update({
     where: { id: outTx.id },
     data: { linkedTransactionId: inTx.id },
-  })
-
-  await prisma.fundTransfer.create({
-    data: {
-      transactionId: outTx.id,
-      fromAccountId,
-      toAccountId,
-      transferDate: new Date(),
-      amount,
-    },
   })
 
   return { outTx, inTx }
@@ -468,23 +487,37 @@ async function findReserveTransactions(companyId: string, payMonth: string, grou
 
 async function deleteReserveTransactions(companyId: string, payMonth: string, groupName: string) {
   const reserves = await findReserveTransactions(companyId, payMonth, groupName)
-  for (const tx of reserves) {
-    if (tx.fundTransfer) {
-      await prisma.fundTransfer.delete({ where: { id: tx.fundTransfer.id } })
-    }
-    if (tx.linkedTransactionId) {
-      const linked = await prisma.transaction.findUnique({
-        where: { id: tx.linkedTransactionId },
+  if (reserves.length === 0) return
+
+  // N+1 排除: linkedTransactionId 経由の取引を一括取得
+  const linkedIds = reserves.map((r) => r.linkedTransactionId).filter((v): v is string => !!v)
+  const linkedRows = linkedIds.length > 0
+    ? await prisma.transaction.findMany({
+        where: { id: { in: linkedIds } },
         include: { fundTransfer: true },
       })
-      if (linked?.fundTransfer) {
-        await prisma.fundTransfer.delete({ where: { id: linked.fundTransfer.id } })
-      }
-      if (linked) {
-        await prisma.transaction.delete({ where: { id: linked.id } })
-      }
+    : []
+  const linkedMap = new Map(linkedRows.map((l) => [l.id, l]))
+
+  // 削除候補を集約して並列実行（FundTransfer → Transaction の順は守る）
+  const fundTransferIds: string[] = []
+  const transactionIds: string[] = []
+  for (const tx of reserves) {
+    if (tx.fundTransfer) fundTransferIds.push(tx.fundTransfer.id)
+    transactionIds.push(tx.id)
+    if (tx.linkedTransactionId) {
+      const linked = linkedMap.get(tx.linkedTransactionId)
+      if (linked?.fundTransfer) fundTransferIds.push(linked.fundTransfer.id)
+      if (linked) transactionIds.push(linked.id)
     }
-    await prisma.transaction.delete({ where: { id: tx.id } })
+  }
+
+  // FundTransfer を先に一括削除 → 続いて Transaction を一括削除
+  if (fundTransferIds.length > 0) {
+    await prisma.fundTransfer.deleteMany({ where: { id: { in: fundTransferIds } } })
+  }
+  if (transactionIds.length > 0) {
+    await prisma.transaction.deleteMany({ where: { id: { in: transactionIds } } })
   }
 }
 
@@ -531,40 +564,59 @@ export async function updateSalaryStatus(
     // 既存の積立取引を削除（再READY時の金額更新対応）
     await deleteReserveTransactions(companyId, existing.payMonth, groupName)
 
-    // メイン口座と仮想口座を取得
-    const company = await prisma.company.findUnique({ where: { id: companyId } })
+    // 並列化: company・社保口座・消費税口座を1ラウンドトリップで取得
+    const [company, socialInsuranceAccount, consumptionTaxAccount] = await Promise.all([
+      prisma.company.findUnique({
+        where: { id: companyId },
+        select: { mainAccountId: true },
+      }),
+      prisma.account.findFirst({
+        where: { companyId, accountType: "SOCIAL_INSURANCE_RESERVE" },
+        select: { id: true },
+      }),
+      prisma.account.findFirst({
+        where: { companyId, accountType: "CONSUMPTION_TAX_RESERVE" },
+        select: { id: true },
+      }),
+    ])
     const mainAccount = company?.mainAccountId
-      ? await prisma.account.findUnique({ where: { id: company.mainAccountId } })
-      : await prisma.account.findFirst({ where: { companyId, isMain: true } })
-
-    const socialInsuranceAccount = await prisma.account.findFirst({
-      where: { companyId, accountType: "SOCIAL_INSURANCE_RESERVE" },
-    })
-    const consumptionTaxAccount = await prisma.account.findFirst({
-      where: { companyId, accountType: "CONSUMPTION_TAX_RESERVE" },
-    })
+      ? await prisma.account.findUnique({
+          where: { id: company.mainAccountId },
+          select: { id: true },
+        })
+      : await prisma.account.findFirst({
+          where: { companyId, isMain: true },
+          select: { id: true },
+        })
 
     if (mainAccount) {
+      // 並列化: 社保 と 消費税 の積立振替は独立
+      const transfers: Promise<unknown>[] = []
       if (socialInsuranceAccount && existing.socialInsuranceReserve > BigInt(0)) {
-        await createReserveTransfer(
-          companyId,
-          mainAccount.id,
-          socialInsuranceAccount.id,
-          existing.socialInsuranceReserve,
-          existing.payMonth,
-          reserveSummary("社保", existing.payMonth, groupName)
+        transfers.push(
+          createReserveTransfer(
+            companyId,
+            mainAccount.id,
+            socialInsuranceAccount.id,
+            existing.socialInsuranceReserve,
+            existing.payMonth,
+            reserveSummary("社保", existing.payMonth, groupName)
+          )
         )
       }
       if (consumptionTaxAccount && existing.consumptionTaxReserve > BigInt(0)) {
-        await createReserveTransfer(
-          companyId,
-          mainAccount.id,
-          consumptionTaxAccount.id,
-          existing.consumptionTaxReserve,
-          existing.payMonth,
-          reserveSummary("消費税", existing.payMonth, groupName)
+        transfers.push(
+          createReserveTransfer(
+            companyId,
+            mainAccount.id,
+            consumptionTaxAccount.id,
+            existing.consumptionTaxReserve,
+            existing.payMonth,
+            reserveSummary("消費税", existing.payMonth, groupName)
+          )
         )
       }
+      await Promise.all(transfers)
     }
   }
 
@@ -664,9 +716,14 @@ export async function generateSalaryJournalEntries(
     throw new Error("給与が確定済みでない場合は仕訳を生成できません")
   }
 
-  const mappings = await prisma.salaryJournalMapping.findMany({
-    where: { isActive: true },
-  })
+  // 並列化: マッピング取得 + 既存仕訳チェック(count に置換)
+  const journalPrefix = `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth}`
+  const [mappings, existingJournalCount] = await Promise.all([
+    prisma.salaryJournalMapping.findMany({ where: { isActive: true } }),
+    prisma.transaction.count({
+      where: { companyId, summary: { startsWith: journalPrefix } },
+    }),
+  ])
   const mappingMap = new Map(mappings.map((m) => [m.deductionItemName, m]))
 
   const accountId = entry.payrollGroup.defaultAccountId
@@ -674,17 +731,13 @@ export async function generateSalaryJournalEntries(
     throw new Error("給与グループにデフォルト口座が設定されていません")
   }
 
-  const existingJournals = await prisma.transaction.findMany({
-    where: {
-      companyId,
-      summary: { startsWith: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth}` },
-    },
-  })
-  if (existingJournals.length > 0) {
+  if (existingJournalCount > 0) {
     throw new Error("この給与の仕訳はすでに生成済みです")
   }
 
-  const createdTransactions: string[] = []
+  // 並列化: 各仕訳取引を Promise.all で同時 create（独立、id 取得後に Detail を作る pair は内包）
+  type CreateResult = { id: string }
+  const tasks: Promise<CreateResult>[] = []
 
   for (const ded of entry.deductions) {
     if (ded.amount <= BigInt(0)) continue
@@ -695,90 +748,102 @@ export async function generateSalaryJournalEntries(
     const classification = mapping?.classification || null
 
     if (!midId) continue
+    const negAmount = ded.amount * BigInt(-1)
+    const itemName = ded.itemName
 
-    const tx = await prisma.transaction.create({
-      data: {
-        companyId,
-        accountId,
-        type: "EXPENSE",
-        status: "DRAFT",
-        accountingMonth: entry.payMonth,
-        transactionDate: entry.payDate,
-        amount: ded.amount * BigInt(-1),
-        classification,
-        summary: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth} ${ded.itemName}`,
-        displayOrder: 0,
-      },
-    })
-
-    await prisma.transactionDetail.create({
-      data: {
-        transactionId: tx.id,
-        midId,
-        subId,
-        amount: ded.amount * BigInt(-1),
-        summary: ded.itemName,
-        displayOrder: 0,
-      },
-    })
-
-    createdTransactions.push(tx.id)
+    tasks.push(
+      (async () => {
+        const tx = await prisma.transaction.create({
+          data: {
+            companyId,
+            accountId,
+            type: "EXPENSE",
+            status: "DRAFT",
+            accountingMonth: entry.payMonth,
+            transactionDate: entry.payDate,
+            amount: negAmount,
+            classification,
+            summary: `${journalPrefix} ${itemName}`,
+            displayOrder: 0,
+          },
+          select: { id: true },
+        })
+        await prisma.transactionDetail.create({
+          data: {
+            transactionId: tx.id,
+            midId,
+            subId,
+            amount: negAmount,
+            summary: itemName,
+            displayOrder: 0,
+          },
+        })
+        return tx
+      })()
+    )
   }
 
   for (const pd of entry.paymentDetails) {
     const payAccountId = pd.accountId || accountId
-
-    const tx = await prisma.transaction.create({
-      data: {
-        companyId,
-        accountId: payAccountId,
-        type: "SALARY",
-        status: "DRAFT",
-        accountingMonth: entry.payMonth,
-        transactionDate: pd.paymentDate,
-        amount: pd.amount * BigInt(-1),
-        paymentMethod: pd.paymentMethod,
-        summary: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth} 差引支給`,
-        displayOrder: 0,
-      },
-    })
-
-    createdTransactions.push(tx.id)
+    tasks.push(
+      prisma.transaction.create({
+        data: {
+          companyId,
+          accountId: payAccountId,
+          type: "SALARY",
+          status: "DRAFT",
+          accountingMonth: entry.payMonth,
+          transactionDate: pd.paymentDate,
+          amount: pd.amount * BigInt(-1),
+          paymentMethod: pd.paymentMethod,
+          summary: `${journalPrefix} 差引支給`,
+          displayOrder: 0,
+        },
+        select: { id: true },
+      })
+    )
   }
 
   if (entry.socialInsuranceReserve > BigInt(0)) {
-    const tx = await prisma.transaction.create({
-      data: {
-        companyId,
-        accountId,
-        type: "EXPENSE",
-        status: "DRAFT",
-        accountingMonth: entry.payMonth,
-        transactionDate: entry.payDate,
-        amount: entry.socialInsuranceReserve * BigInt(-1),
-        summary: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth} 社保積立`,
-        displayOrder: 0,
-      },
-    })
-    createdTransactions.push(tx.id)
+    tasks.push(
+      prisma.transaction.create({
+        data: {
+          companyId,
+          accountId,
+          type: "EXPENSE",
+          status: "DRAFT",
+          accountingMonth: entry.payMonth,
+          transactionDate: entry.payDate,
+          amount: entry.socialInsuranceReserve * BigInt(-1),
+          summary: `${journalPrefix} 社保積立`,
+          displayOrder: 0,
+        },
+        select: { id: true },
+      })
+    )
   }
 
   if (entry.consumptionTaxReserve > BigInt(0)) {
-    const tx = await prisma.transaction.create({
-      data: {
-        companyId,
-        accountId,
-        type: "EXPENSE",
-        status: "DRAFT",
-        accountingMonth: entry.payMonth,
-        transactionDate: entry.payDate,
-        amount: entry.consumptionTaxReserve * BigInt(-1),
-        summary: `[給与仕訳] ${entry.payrollGroup.name}/${entry.payMonth} 消費税積立`,
-        displayOrder: 0,
-      },
-    })
-    createdTransactions.push(tx.id)
+    tasks.push(
+      prisma.transaction.create({
+        data: {
+          companyId,
+          accountId,
+          type: "EXPENSE",
+          status: "DRAFT",
+          accountingMonth: entry.payMonth,
+          transactionDate: entry.payDate,
+          amount: entry.consumptionTaxReserve * BigInt(-1),
+          summary: `${journalPrefix} 消費税積立`,
+          displayOrder: 0,
+        },
+        select: { id: true },
+      })
+    )
   }
+
+  const results = await Promise.all(tasks)
+  const createdTransactions: string[] = results.map((r) => r.id)
 
   await createAuditLog({
     tableName: "salary_entries_fina",

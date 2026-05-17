@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useRouter } from "next/navigation"
-import { useCompany, isAllCompanies } from "@/contexts/company-context"
-import { AllCompaniesBanner } from "@/components/all-companies-banner"
+import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,8 +27,10 @@ import {
   type CheckpointData,
 } from "@/app/actions/cashflow-table"
 import { createCheckpoint, updateCheckpoint, deleteCheckpoint } from "@/app/actions/reconciliation"
+import { getCompanyInfoSummary } from "@/app/actions/companies"
+import { generateCashFlowReport, type CashFlowReport } from "@/app/actions/cashflow-reports"
 import { formatYen, formatDate, getCurrentMonth } from "@/lib/format"
-import { Printer, GripVertical, ChevronUp, ChevronDown, CheckCircle2, AlertTriangle, Landmark } from "lucide-react"
+import { Printer, GripVertical, ChevronUp, ChevronDown, CheckCircle2, AlertTriangle, Landmark, FileText, Building2, Link2 } from "lucide-react"
 import {
   DndContext,
   closestCenter,
@@ -101,6 +103,174 @@ const TYPE_TO_PAGE: Record<string, string> = {
   TRANSFER: "/expenses",
 }
 
+function fmt(n: string | number | bigint): string {
+  return `¥${Number(n).toLocaleString("ja-JP")}`
+}
+
+/**
+ * PDF P1〜P2 帳票作成: 資金移動・振込・現金の3種別をHTMLで出力
+ */
+function buildReportHtml(r: CashFlowReport): string {
+  const css = `<style>
+    @page { size: A4; margin: 16mm 14mm; }
+    body { font-family: "Hiragino Sans","Yu Gothic","Meiryo",sans-serif; font-size: 11pt; color: #111; }
+    h1 { font-size: 18pt; margin: 0 0 4mm 0; text-align: center; letter-spacing: 0.1em; }
+    .header { display:flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6mm; }
+    .header .meta { font-size: 9pt; line-height: 1.5; text-align:right; }
+    .acct { border:1px solid #333; padding: 3mm 4mm; margin-bottom: 4mm; font-size: 10pt; }
+    .acct .lbl { color:#555; font-size:9pt; margin-right:4px; }
+    .acct strong { font-size: 11pt; }
+    table { width:100%; border-collapse: collapse; margin-bottom: 4mm; }
+    th, td { border: 1px solid #333; padding: 2mm 3mm; vertical-align: top; }
+    th { background: #f0f0f0; font-weight: 600; font-size: 9pt; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; font-family: monospace; }
+    tfoot td { background: #fafafa; font-weight: 600; }
+    .denomination { width: 100%; border-collapse: collapse; margin-top: 4mm; }
+    .denomination th, .denomination td { border:1px solid #333; padding: 2mm; text-align:center; }
+    .denomination th { background:#f0f0f0; font-size:9pt; }
+    .denomination .total { background:#fafafa; font-weight:600; }
+    .footnote { font-size: 9pt; color:#555; margin-top: 6mm; }
+    @media print { button { display: none !important; } }
+  </style>`
+
+  const titleMap = {
+    FUND_TRANSFER: "資金移動帳票",
+    BANK_TRANSFER: "振込依頼書",
+    CASH: "現金支払帳票",
+  } as const
+  const title = titleMap[r.type]
+
+  const acctText = (a: { bankName: string | null; bankCode: string | null; branchName: string | null; branchCode: string | null; accountType: string | null; accountNumber: string | null; accountHolder: string | null }) => {
+    const parts = [
+      a.bankName ? `${a.bankName}${a.bankCode ? `(${a.bankCode})` : ""}` : "",
+      a.branchName ? `${a.branchName}${a.branchCode ? `(${a.branchCode})` : ""}` : "",
+      a.accountType ?? "",
+      a.accountNumber ?? "",
+      a.accountHolder ? `名義: ${a.accountHolder}` : "",
+    ].filter(Boolean)
+    return parts.join(" / ") || "—"
+  }
+
+  const headerHtml = `
+    <div class="header">
+      <h1>${title}</h1>
+      <div class="meta">
+        ${r.company.companyName}<br/>
+        ${r.company.address ? r.company.address + "<br/>" : ""}
+        ${r.company.phone ? "TEL " + r.company.phone + "<br/>" : ""}
+        ${r.company.invoiceNumber ? "登録番号 " + r.company.invoiceNumber + "<br/>" : ""}
+        作成日: ${new Date().toLocaleDateString("ja-JP")}
+      </div>
+    </div>
+    <div class="acct">
+      <span class="lbl">自社口座:</span><strong>${acctText(r.selfAccount)}</strong>
+    </div>
+  `
+
+  if (r.type === "FUND_TRANSFER") {
+    const dest = r.destinationAccount
+    const destHtml = dest
+      ? `<div class="acct"><span class="lbl">移動先口座:</span><strong>${acctText(dest)}</strong></div>`
+      : ""
+    const rowsHtml = r.rows
+      .map(
+        (row, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${row.date ?? ""}</td>
+          <td>${row.partnerName}</td>
+          <td>${row.summary}</td>
+          <td class="num">${fmt(row.amount)}</td>
+        </tr>`
+      )
+      .join("")
+    return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>${title}</title>${css}</head>
+      <body>
+        ${headerHtml}
+        ${destHtml}
+        <table>
+          <thead><tr><th>#</th><th>日付</th><th>相手先</th><th>内容</th><th>金額</th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+          <tfoot><tr><td colspan="4">合計</td><td class="num">${fmt(r.totalAmount)}</td></tr></tfoot>
+        </table>
+        <button onclick="window.print()" style="margin-top:6mm;padding:6px 12px;">印刷</button>
+      </body></html>`
+  }
+
+  if (r.type === "BANK_TRANSFER") {
+    const rowsHtml = r.rows
+      .map((row, i) => {
+        const bank = row.partnerBank
+        const bankCell = bank
+          ? `${bank.bankCode ?? ""}/${bank.branchCode ?? ""} ${bank.accountType ?? ""} ${bank.accountNumber ?? ""}<br/><small>${bank.accountHolder ?? ""}</small>`
+          : "—"
+        return `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${row.date ?? ""}</td>
+            <td>${row.partnerName}</td>
+            <td>${row.summary}</td>
+            <td class="num">${fmt(row.amount)}</td>
+            <td>${bankCell}</td>
+          </tr>`
+      })
+      .join("")
+    return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>${title}</title>${css}</head>
+      <body>
+        ${headerHtml}
+        <table>
+          <thead><tr><th>#</th><th>日付</th><th>相手先</th><th>内容</th><th>金額</th><th>振込先口座</th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+          <tfoot>
+            <tr><td colspan="4">件数 ${r.rows.length}件 / 振込合計</td><td class="num">${fmt(r.totalAmount)}</td><td></td></tr>
+            <tr><td colspan="4">自社負担 振込手数料合計</td><td class="num">${fmt(r.totalFeeAmount)}</td><td></td></tr>
+          </tfoot>
+        </table>
+        <p class="footnote">※ 振込手数料は実際の振込時に銀行画面で確認してください。</p>
+        <button onclick="window.print()" style="margin-top:6mm;padding:6px 12px;">印刷</button>
+      </body></html>`
+  }
+
+  // CASH
+  const rowsHtml = r.rows
+    .map(
+      (row, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${row.date ?? ""}</td>
+        <td>${row.partnerName}</td>
+        <td>${row.summary}</td>
+        <td class="num">${fmt(row.amount)}</td>
+      </tr>`
+    )
+    .join("")
+  const denomHtml = r.denominations
+    .map(
+      (d) => `
+      <tr>
+        <td>${d.value.toLocaleString()}</td>
+        <td contenteditable="true">&nbsp;</td>
+      </tr>`
+    )
+    .join("")
+  return `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>${title}</title>${css}</head>
+    <body>
+      ${headerHtml}
+      <table>
+        <thead><tr><th>#</th><th>日付</th><th>相手先</th><th>内容</th><th>金額</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+        <tfoot><tr><td colspan="4">件数 ${r.rows.length}件 / 合計</td><td class="num">${fmt(r.totalAmount)}</td></tr></tfoot>
+      </table>
+      <h3 style="font-size:11pt;margin-top:6mm;">金種表（手書き用）</h3>
+      <table class="denomination" style="max-width:60mm;">
+        <thead><tr><th>金種</th><th>枚数</th></tr></thead>
+        <tbody>${denomHtml}</tbody>
+        <tfoot><tr class="total"><td>合計</td><td>${fmt(r.totalAmount)}</td></tr></tfoot>
+      </table>
+      <button onclick="window.print()" style="margin-top:6mm;padding:6px 12px;">印刷</button>
+    </body></html>`
+}
+
 function getVariance(row: CashFlowRow): number | null {
   const est = row.estimatedAmount ? Number(row.estimatedAmount) : null
   const act = row.actualAmount ? Number(row.actualAmount) : null
@@ -168,13 +338,17 @@ function SortableRow({
   const canDefer = row.status !== "CONFIRMED"
   const variance = getVariance(row)
 
+  // PDF P1: 未達は薄色表示
+  const overdueClass = row.isOverdue ? "opacity-60 italic" : ""
+
   return (
     <TableRow
       ref={setNodeRef}
       style={style}
-      className={`cursor-pointer ${isSelected ? "bg-muted/50" : ""} ${isBeingDraggedWithGroup ? "bg-blue-50 dark:bg-blue-950/30" : ""}`}
+      className={`cursor-pointer ${overdueClass} ${isSelected ? "bg-muted/50" : ""} ${isBeingDraggedWithGroup ? "bg-blue-50 dark:bg-blue-950/30" : ""} ${row.isInterGroup ? "border-l-2 border-l-purple-400" : ""}`}
       onClick={() => onRowClick(row)}
       onDoubleClick={() => onDoubleClick(row)}
+      title={row.isOverdue ? "未達: 予定日を過ぎていますが未確定です" : undefined}
     >
       <TableCell className="w-8 cursor-grab" {...attributes} {...listeners} onClick={(e) => e.stopPropagation()}>
         <GripVertical className="h-4 w-4 text-muted-foreground" />
@@ -195,9 +369,19 @@ function SortableRow({
         {row.scheduledDate ? formatDate(row.scheduledDate) : "—"}
       </TableCell>
       <TableCell>
-        <Badge variant="outline">
-          {TYPE_LABELS[row.type] || row.type}
-        </Badge>
+        <div className="flex items-center gap-1">
+          <Badge variant="outline">
+            {TYPE_LABELS[row.type] || row.type}
+          </Badge>
+          {row.isInterGroup && (
+            <Badge variant="secondary" className="text-[10px] py-0 px-1" title="グループ間取引">
+              <Link2 className="h-3 w-3 mr-0.5" />G間
+            </Badge>
+          )}
+          {row.isOverdue && (
+            <Badge variant="outline" className="text-[10px] py-0 px-1 border-orange-400 text-orange-600">未達</Badge>
+          )}
+        </div>
       </TableCell>
       <TableCell>
         {row.classification ? CLASSIFICATION_LABELS[row.classification] || row.classification : "—"}
@@ -303,6 +487,15 @@ export default function CashFlowTablePage() {
   const [checkpointNote, setCheckpointNote] = useState("")
   const [checkpointSaving, setCheckpointSaving] = useState(false)
 
+  // 会社情報一覧（PDF P1）
+  type CompanyInfo = Awaited<ReturnType<typeof getCompanyInfoSummary>>
+  const [companyInfo, setCompanyInfo] = useState<CompanyInfo>(null)
+  const [companyInfoOpen, setCompanyInfoOpen] = useState(false)
+
+  // 帳票作成ダイアログ
+  const [reportData, setReportData] = useState<CashFlowReport | null>(null)
+  const [reportLoading, setReportLoading] = useState(false)
+
   const loadAccounts = useCallback(async (companyId: string) => {
     const accts = await getAccounts(companyId)
     const activeAccounts = accts.filter((a) => a.isActive).map((a) => ({
@@ -337,13 +530,14 @@ export default function CashFlowTablePage() {
   }, [])
 
   useEffect(() => {
-    if (selectedCompany && !isAllCompanies(selectedCompany)) {
+    if (selectedCompany) {
       loadAccounts(selectedCompany.id)
+      getCompanyInfoSummary(selectedCompany.id).then(setCompanyInfo).catch(() => setCompanyInfo(null))
     }
   }, [selectedCompany, loadAccounts])
 
   useEffect(() => {
-    if (selectedCompany && !isAllCompanies(selectedCompany) && selectedAccountId && selectedMonth) {
+    if (selectedCompany && selectedAccountId && selectedMonth) {
       loadTableData(selectedCompany.id, selectedAccountId, selectedMonth)
     }
   }, [selectedCompany, selectedAccountId, selectedMonth, loadTableData])
@@ -658,6 +852,32 @@ export default function CashFlowTablePage() {
     }
   }
 
+  // PDF P1: 帳票作成（連続選択した同一種別の取引から生成）
+  const handleGenerateReport = async () => {
+    if (!selectedCompany || selectedRows.size === 0) return
+    setReportLoading(true)
+    try {
+      const data = await generateCashFlowReport(selectedCompany.id, Array.from(selectedRows))
+      setReportData(data)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "帳票作成に失敗しました")
+    } finally {
+      setReportLoading(false)
+    }
+  }
+
+  const printReport = () => {
+    if (!reportData) return
+    const win = window.open("", "_blank", "width=900,height=700")
+    if (!win) {
+      alert("ポップアップがブロックされました。許可してください。")
+      return
+    }
+    win.document.open()
+    win.document.write(buildReportHtml(reportData))
+    win.document.close()
+  }
+
   const handleMoveSelected = (direction: "up" | "down") => {
     if (!tableData || !selectedCompany || selectedRows.size === 0) return
 
@@ -717,25 +937,14 @@ export default function CashFlowTablePage() {
 
   const isClosed = monthCloseStatus?.isClosed === true
 
-  if (isAllCompanies(selectedCompany)) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">資金繰り表</h1>
-          <p className="text-muted-foreground">全社合算モード</p>
-        </div>
-        <AllCompaniesBanner feature="資金繰り表" />
-      </div>
-    )
-  }
-
   if (!selectedCompany) {
     return (
       <div className="space-y-6">
-        <div>
+        <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold tracking-tight">資金繰り表</h1>
-          <p className="text-muted-foreground">会社を選択してください</p>
+          <CompanySwitcher />
         </div>
+        <p className="text-muted-foreground">会社を選択してください</p>
       </div>
     )
   }
@@ -748,6 +957,7 @@ export default function CashFlowTablePage() {
           <p className="text-muted-foreground">{selectedCompany.name} の資金繰り表</p>
         </div>
         <div className="flex items-center gap-2">
+          <CompanySwitcher />
           {!isClosed && selectedRows.size > 0 && (
             <>
               <Button
@@ -765,6 +975,16 @@ export default function CashFlowTablePage() {
               >
                 <ChevronDown className="h-4 w-4 mr-1" />
                 下へ
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleGenerateReport}
+                disabled={reportLoading}
+                title="選択行から帳票を作成（同一種別のみ）"
+              >
+                <FileText className="h-4 w-4 mr-1" />
+                {reportLoading ? "生成中..." : "帳票作成"}
               </Button>
               <Button
                 variant="outline"
@@ -835,7 +1055,7 @@ export default function CashFlowTablePage() {
       </Card>
 
       {tableData && (
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">期首残高</CardTitle>
@@ -850,6 +1070,11 @@ export default function CashFlowTablePage() {
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold text-green-600">{formatYen(Number(tableData.totalDeposit))}</p>
+              {Number(tableData.interGroupDeposit) > 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  内 グループ間 <span className="font-mono text-purple-600">{formatYen(Number(tableData.interGroupDeposit))}</span>
+                </p>
+              )}
             </CardContent>
           </Card>
           <Card>
@@ -858,14 +1083,39 @@ export default function CashFlowTablePage() {
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold text-red-600">{formatYen(Math.abs(Number(tableData.totalWithdrawal)))}</p>
+              {Number(tableData.interGroupWithdrawal) < 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  内 グループ間 <span className="font-mono text-purple-600">{formatYen(Math.abs(Number(tableData.interGroupWithdrawal)))}</span>
+                </p>
+              )}
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">月末残高</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">予測残高（月末）</CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold">{formatYen(Number(tableData.closingBalance))}</p>
+            </CardContent>
+          </Card>
+          <Card className="cursor-pointer hover:bg-muted/50" onClick={() => setCompanyInfoOpen(true)}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                <Building2 className="h-4 w-4" />
+                会社情報
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {companyInfo ? (
+                <div className="text-xs space-y-0.5">
+                  <p className="truncate"><span className="text-muted-foreground">法人番号:</span> {companyInfo.corporateNumber || "—"}</p>
+                  <p className="truncate"><span className="text-muted-foreground">設立:</span> {companyInfo.establishedDate ? formatDate(companyInfo.establishedDate) : "—"}</p>
+                  <p className="truncate"><span className="text-muted-foreground">資本金:</span> {companyInfo.capitalAmount ? formatYen(Number(companyInfo.capitalAmount)) : "—"}</p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">読み込み中...</p>
+              )}
+              <p className="text-xs text-muted-foreground mt-1">クリックで詳細</p>
             </CardContent>
           </Card>
         </div>
@@ -1139,6 +1389,123 @@ export default function CashFlowTablePage() {
             </Button>
             <Button onClick={handleSaveCheckpoint} disabled={checkpointSaving || !checkpointBalance}>
               {checkpointSaving ? "保存中..." : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 会社情報詳細ダイアログ (PDF P1 ピンク枠) */}
+      <Dialog open={companyInfoOpen} onOpenChange={setCompanyInfoOpen}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Building2 className="h-5 w-5" />会社情報一覧</DialogTitle>
+          </DialogHeader>
+          {companyInfo ? (
+            <div className="space-y-2 py-2 text-sm">
+              <div className="grid grid-cols-3 gap-x-3 gap-y-2">
+                <div className="text-muted-foreground">会社名</div>
+                <div className="col-span-2 font-medium">{companyInfo.name}{companyInfo.shortName ? `（${companyInfo.shortName}）` : ""}</div>
+                <div className="text-muted-foreground">業種</div>
+                <div className="col-span-2">{companyInfo.industryName || "—"}</div>
+                <div className="text-muted-foreground">代表者</div>
+                <div className="col-span-2">{[companyInfo.representativeTitle, companyInfo.representativeName].filter(Boolean).join(" ") || "—"}</div>
+                <div className="text-muted-foreground">決算月</div>
+                <div className="col-span-2">{companyInfo.fiscalMonth}月</div>
+                <div className="text-muted-foreground">設立年月日</div>
+                <div className="col-span-2">{companyInfo.establishedDate ? formatDate(companyInfo.establishedDate) : "—"}</div>
+                <div className="text-muted-foreground">資本金</div>
+                <div className="col-span-2 font-mono">{companyInfo.capitalAmount ? formatYen(Number(companyInfo.capitalAmount)) : "—"}</div>
+                <div className="text-muted-foreground">法人番号</div>
+                <div className="col-span-2 font-mono">{companyInfo.corporateNumber || "—"}</div>
+                <div className="text-muted-foreground">インボイス番号</div>
+                <div className="col-span-2 font-mono">{companyInfo.invoiceNumber || "—"}</div>
+                <div className="text-muted-foreground">e-Tax番号</div>
+                <div className="col-span-2 font-mono">{companyInfo.eTaxNumber || "—"}</div>
+                <div className="text-muted-foreground">経理担当</div>
+                <div className="col-span-2">{companyInfo.accountingManager || "—"}</div>
+              </div>
+              <p className="text-xs text-muted-foreground border-t pt-2 mt-3">
+                編集はマスタ → 会社一覧 から
+              </p>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-sm py-4">会社情報を取得できませんでした</p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCompanyInfoOpen(false)}>閉じる</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 帳票作成プレビュー (PDF P1〜P2) */}
+      <Dialog open={reportData !== null} onOpenChange={(open) => { if (!open) setReportData(null) }}>
+        <DialogContent className="sm:max-w-[640px] max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5" />
+              {reportData?.type === "FUND_TRANSFER" && "資金移動帳票"}
+              {reportData?.type === "BANK_TRANSFER" && "振込依頼書"}
+              {reportData?.type === "CASH" && "現金支払帳票（金種表付）"}
+            </DialogTitle>
+          </DialogHeader>
+          {reportData && (
+            <div className="space-y-3 py-2 text-sm">
+              <div className="border rounded p-3 bg-muted/30">
+                <p className="text-xs text-muted-foreground mb-1">自社口座</p>
+                <p className="font-mono">
+                  {[reportData.selfAccount.bankName, reportData.selfAccount.branchName, reportData.selfAccount.accountType, reportData.selfAccount.accountNumber].filter(Boolean).join(" / ")}
+                </p>
+              </div>
+              {reportData.type === "FUND_TRANSFER" && reportData.destinationAccount && (
+                <div className="border rounded p-3 bg-purple-50 dark:bg-purple-950/30">
+                  <p className="text-xs text-muted-foreground mb-1">移動先口座</p>
+                  <p className="font-mono">
+                    {[reportData.destinationAccount.bankName, reportData.destinationAccount.branchName, reportData.destinationAccount.accountType, reportData.destinationAccount.accountNumber].filter(Boolean).join(" / ")}
+                  </p>
+                </div>
+              )}
+              <div className="border rounded">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted">
+                    <tr>
+                      <th className="p-2 text-left">#</th>
+                      <th className="p-2 text-left">日付</th>
+                      <th className="p-2 text-left">相手先</th>
+                      <th className="p-2 text-left">内容</th>
+                      <th className="p-2 text-right">金額</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportData.rows.map((r, i) => (
+                      <tr key={r.id} className="border-t">
+                        <td className="p-2">{i + 1}</td>
+                        <td className="p-2">{r.date ?? ""}</td>
+                        <td className="p-2">{r.partnerName}</td>
+                        <td className="p-2 truncate max-w-[180px]">{r.summary}</td>
+                        <td className="p-2 text-right font-mono">{formatYen(Number(r.amount))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-muted font-medium">
+                    <tr>
+                      <td className="p-2" colSpan={4}>件数 {reportData.rows.length}件 / 合計</td>
+                      <td className="p-2 text-right font-mono">{formatYen(Number(reportData.totalAmount))}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              {reportData.type === "CASH" && (
+                <p className="text-xs text-muted-foreground">
+                  印刷後に金種表（10000/5000/1000/500/100/50/10/5/1円）に手書きで枚数を記入できます。
+                </p>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReportData(null)}>閉じる</Button>
+            <Button onClick={printReport}>
+              <Printer className="h-4 w-4 mr-1" />
+              印刷
             </Button>
           </DialogFooter>
         </DialogContent>

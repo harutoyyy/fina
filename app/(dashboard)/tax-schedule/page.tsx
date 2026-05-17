@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -37,9 +38,8 @@ import {
   updateTaxSchedule,
   deleteTaxSchedule,
   generateInterimTaxSchedules,
-  TAX_TYPE_LABELS,
-  type TaxType,
 } from "@/app/actions/tax-schedule"
+import { TAX_TYPE_LABELS, type TaxType } from "@/lib/tax-schedule"
 
 type ScheduleRow = Awaited<ReturnType<typeof getTaxSchedules>>[number]
 
@@ -256,6 +256,7 @@ export default function TaxSchedulePage() {
             法人税・消費税・住民税等の予定額と納付状況を管理します（PDF P9）
           </p>
         </div>
+        <CompanySwitcher />
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setInterimOpen(true)}>
             <Calculator className="h-4 w-4 mr-1" />

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -323,9 +324,10 @@ export default function RecurringPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">定期テンプレート</h1>
+          <h1 className="text-2xl font-bold tracking-tight">定期支払</h1>
           <p className="text-muted-foreground">会社を選択してください</p>
         </div>
+        <CompanySwitcher />
       </div>
     )
   }
@@ -334,9 +336,10 @@ export default function RecurringPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">定期テンプレート</h1>
+          <h1 className="text-2xl font-bold tracking-tight">定期支払</h1>
           <p className="text-muted-foreground">{selectedCompany.name} の定期取引テンプレートを管理します</p>
         </div>
+        <CompanySwitcher />
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => { setGenerateResult(null); setGenerateDialogOpen(true) }}>
             月次一括生成

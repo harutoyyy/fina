@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useCompany } from "@/contexts/company-context"
+import { CompanySwitcher } from "@/components/company-switcher"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -196,6 +197,7 @@ export default function CashWithdrawalPage() {
           <h1 className="text-2xl font-bold tracking-tight">現金引出バッチ</h1>
           <p className="text-muted-foreground">現金引出と金種表を管理します</p>
         </div>
+        <CompanySwitcher />
         <div className="flex items-center gap-3">
           <Input
             type="month"
