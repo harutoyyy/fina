@@ -68,6 +68,21 @@ export type TransactionWithRelations = {
   }[]
 }
 
+// children と details は include ではなく select で必要列のみに絞る。
+// 旧実装は children に親と同じ 20+ カラムを全部取得していたが、
+// 子取引で表示に使うのは id/amount/status/transactionDate/summary だけ。
+// details の mid/sub も id/name のみ必要。
+const detailSelect = {
+  id: true,
+  midId: true,
+  subId: true,
+  amount: true,
+  summary: true,
+  displayOrder: true,
+  mid: { select: { id: true, name: true } },
+  sub: { select: { id: true, name: true } },
+} as const
+
 const transactionInclude = {
   account: {
     select: { id: true, bankName: true, branchName: true, accountNumber: true },
@@ -77,20 +92,19 @@ const transactionInclude = {
   },
   details: {
     orderBy: { displayOrder: "asc" as const },
-    include: {
-      mid: { select: { id: true, name: true } },
-      sub: { select: { id: true, name: true } },
-    },
+    select: detailSelect,
   },
   children: {
     orderBy: { displayOrder: "asc" as const },
-    include: {
+    select: {
+      id: true,
+      amount: true,
+      status: true,
+      transactionDate: true,
+      summary: true,
       details: {
         orderBy: { displayOrder: "asc" as const },
-        include: {
-          mid: { select: { id: true, name: true } },
-          sub: { select: { id: true, name: true } },
-        },
+        select: detailSelect,
       },
     },
   },
