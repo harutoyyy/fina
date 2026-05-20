@@ -88,8 +88,10 @@ export async function getDashboardData(companyId: string): Promise<DashboardSumm
       partner: { select: { name: true } },
     } as const
 
-    // 並列化: monthlyBalance / pastTx / futureTx / SQL合計 を1ラウンドトリップで
-    const [monthlyBalance, pastTx, futureTx, monthSumAgg] = await Promise.all([
+    // 並列化: monthlyBalance / pastTx / futureTx / 月全件 (合計+残高計算用) を1ラウンドトリップで
+    // 旧実装は aggregate + findMany を別々に投げていたが、月全件 findMany 1回で
+    // 月合計と prefix running balance の両方が出せるため 1 RTT 削減。
+    const [monthlyBalance, pastTx, futureTx, allMonthTx] = await Promise.all([
       prisma.monthlyBalance.findUnique({
         where: {
           accountId_yearMonth: { accountId: mainAccount.id, yearMonth: currentMonth },
@@ -124,39 +126,7 @@ export async function getDashboardData(companyId: string): Promise<DashboardSumm
         take: 5,
         select: txSelect,
       }),
-      // 月全件をJS側で走査せず SQL の SUM で口座残高を一括取得
-      prisma.transaction.aggregate({
-        where: {
-          companyId,
-          accountId: mainAccount.id,
-          accountingMonth: currentMonth,
-        },
-        _sum: { amount: true },
-      }),
-    ])
-
-    const openingBalance = monthlyBalance?.openingBalance ?? BigInt(0)
-    const monthSum = monthSumAgg._sum.amount ?? BigInt(0)
-    const closingBalance = openingBalance + monthSum
-
-    mainAccountBalance = closingBalance.toString()
-
-    // 表示する 8 件分の running balance のみ算出する。
-    // 各表示取引について「displayOrder/transactionDate がそれ以下の合計」を
-    // 1 クエリで取得すれば良いが、Prisma で複雑な OR/lte は厄介なので、
-    // 表示行と同じ並び順の取引だけを引いてアキュムレートする (全件ではなく
-    // 8 件分以下の prefix で済む) — ただし正確な prefix は前段の取引を含むため、
-    // 「対象取引のID集合より前の取引すべて」を引く必要がある。
-    // ここでは表示8件のIDだけのまとめサブクエリを使い、各表示行に対し
-    // groupBy で running balance を算出する代わりに、必要範囲だけ findMany する。
-    const displayed = [...pastTx.reverse(), ...futureTx]
-
-    let balanceMap = new Map<string, bigint>()
-    if (displayed.length > 0) {
-      // 表示行に到達するまでの取引すべてを取り、累積する。
-      // 月全体ではなく「表示行のうち最後の行までで終わる」prefix にしたいが、
-      // 月内取引数は通常数十~数百件なので影響は小さい。BigInt列を最小化して取得。
-      const prefixTx = await prisma.transaction.findMany({
+      prisma.transaction.findMany({
         where: {
           companyId,
           accountId: mainAccount.id,
@@ -164,16 +134,27 @@ export async function getDashboardData(companyId: string): Promise<DashboardSumm
         },
         orderBy: [{ displayOrder: "asc" }, { transactionDate: "asc" }],
         select: { id: true, amount: true },
-      })
-      let running = openingBalance
-      const displayedIds = new Set(displayed.map((t) => t.id))
-      for (const tx of prefixTx) {
-        running += tx.amount
-        if (displayedIds.has(tx.id)) {
-          balanceMap.set(tx.id, running)
-        }
+      }),
+    ])
+
+    const openingBalance = monthlyBalance?.openingBalance ?? BigInt(0)
+    const displayed = [...pastTx.reverse(), ...futureTx]
+
+    // 月合計と表示行の running balance を 1 パスで同時計算
+    const displayedIds = new Set(displayed.map((t) => t.id))
+    const balanceMap = new Map<string, bigint>()
+    let running = openingBalance
+    let monthSum = BigInt(0)
+    for (const tx of allMonthTx) {
+      monthSum += tx.amount
+      running += tx.amount
+      if (displayedIds.has(tx.id)) {
+        balanceMap.set(tx.id, running)
       }
     }
+
+    const closingBalance = openingBalance + monthSum
+    mainAccountBalance = closingBalance.toString()
 
     mainAccountTransactions = displayed.map((tx) => ({
       id: tx.id,

@@ -1,15 +1,30 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
-import { requireSession } from "@/lib/auth-server"
+import { requireSession, type ScopeRole } from "@/lib/auth-server"
+
+/**
+ * 旧 role 表現 (ADMIN/OPERATOR/VIEWER) との後方互換用。
+ * SUPER_ADMIN / COMPANY_ADMIN は ADMIN として扱う。
+ */
+export type LegacyRole = "ADMIN" | "OPERATOR" | "VIEWER"
 
 export type CurrentUserProfile = {
   id: string
   authUserId: string
-  role: string
+  /** 旧 role 表現 (後方互換)。新規実装は scopeRole を使うこと。 */
+  role: LegacyRole
+  scopeRole: ScopeRole
   displayName: string
+  primaryCompanyId: string | null
   assignedCompanyIds: string[]
+  templateKey: string | null
   isActive: boolean
+}
+
+function toLegacyRole(scopeRole: ScopeRole): LegacyRole {
+  if (scopeRole === "SUPER_ADMIN" || scopeRole === "COMPANY_ADMIN") return "ADMIN"
+  return scopeRole as LegacyRole
 }
 
 export async function getCurrentUserProfile(): Promise<CurrentUserProfile | null> {
@@ -21,12 +36,16 @@ export async function getCurrentUserProfile(): Promise<CurrentUserProfile | null
 
   if (!profile) return null
 
+  const scopeRole = profile.scopeRole as ScopeRole
   return {
     id: profile.id,
     authUserId: profile.authUserId,
-    role: profile.role,
+    role: toLegacyRole(scopeRole),
+    scopeRole,
     displayName: profile.displayName,
+    primaryCompanyId: profile.primaryCompanyId,
     assignedCompanyIds: profile.assignedCompanyIds,
+    templateKey: profile.templateKey,
     isActive: profile.isActive,
   }
 }
@@ -57,7 +76,8 @@ export async function getExpenseBoxItems(
     where: { authUserId: session.user.id },
   })
 
-  const isAdmin = profile?.role === "ADMIN"
+  // SUPER_ADMIN / COMPANY_ADMIN は旧 ADMIN 相当として扱う (assignedCompany 制限を回避)
+  const isAdmin = profile?.scopeRole === "SUPER_ADMIN" || profile?.scopeRole === "COMPANY_ADMIN"
 
   if (!isAdmin && profile?.assignedCompanyIds) {
     if (!profile.assignedCompanyIds.includes(companyId)) {
@@ -221,7 +241,8 @@ export async function getExpensesForOperator(
     where: { authUserId: session.user.id },
   })
 
-  const isAdmin = profile?.role === "ADMIN"
+  // SUPER_ADMIN / COMPANY_ADMIN は旧 ADMIN 相当として扱う (assignedCompany 制限を回避)
+  const isAdmin = profile?.scopeRole === "SUPER_ADMIN" || profile?.scopeRole === "COMPANY_ADMIN"
 
   const where: Record<string, unknown> = {
     companyId,

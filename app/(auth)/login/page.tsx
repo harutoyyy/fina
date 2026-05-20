@@ -78,17 +78,26 @@ export default function LoginPage() {
               />
             </div>
           </CardContent>
-          <CardFooter className="flex flex-col gap-4">
+          <CardFooter className="flex flex-col gap-3">
             <Button type="submit" className="w-full" disabled={loading}>
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               ログイン
             </Button>
-            <p className="text-sm text-muted-foreground">
-              アカウントをお持ちでない方は{" "}
-              <Link href="/register" className="text-primary hover:underline">
-                新規登録
-              </Link>
-            </p>
+            <div className="w-full border-t pt-3 text-center text-sm text-muted-foreground space-y-2">
+              <p>
+                パスワードを忘れた方は{" "}
+                <Link href="/forgot-password" className="text-primary hover:underline">
+                  こちら
+                </Link>
+              </p>
+              <p>
+                まだアカウントをお持ちでない方は{" "}
+                <Link href="/apply" className="text-primary hover:underline font-medium">
+                  会社の利用申請
+                </Link>{" "}
+                から
+              </p>
+            </div>
           </CardFooter>
         </form>
       </Card>

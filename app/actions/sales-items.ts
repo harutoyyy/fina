@@ -1,21 +1,17 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
-import { requireSession } from "@/lib/auth-server"
+import { requireSession, requireCompanyAdmin } from "@/lib/auth-server"
 import { revalidatePath } from "next/cache"
-import { getCurrentUserProfile } from "@/app/actions/user-profile"
 
 // ============================================================
 // 売上項目メタマスタ（PDF P10）
 // 例: 工事売上、地代収入、雑収入。対象会社チェック付き。
 // ============================================================
 
+// 売上項目マスタの編集は SUPER_ADMIN または COMPANY_ADMIN のみ
 async function requireAdmin() {
-  await requireSession()
-  const profile = await getCurrentUserProfile()
-  if (profile?.role !== "ADMIN") {
-    throw new Error("売上項目マスタの編集は管理者のみ実行できます")
-  }
+  await requireCompanyAdmin()
 }
 
 function parseApplicable(s?: string | null): string[] {
