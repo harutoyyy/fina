@@ -362,12 +362,21 @@ const validTransitions: Record<string, string[]> = {
   CANCELLED: ["DRAFT"],
 }
 
+/**
+ * 認証済セッションのユーザーロールを取得する。
+ * Phase 1 で UserRole → ScopeRole に rename したため、内部的に
+ * SUPER_ADMIN / COMPANY_ADMIN を旧 "ADMIN" 相当として返す。
+ * これにより、既存の `role !== "ADMIN"` 判定箇所を変更せず動かせる。
+ */
 async function getUserRole(userId: string): Promise<string> {
   const profile = await prisma.userProfile.findUnique({
     where: { authUserId: userId },
-    select: { role: true },
+    select: { scopeRole: true },
   })
-  return profile?.role || "OPERATOR"
+  const scopeRole = profile?.scopeRole ?? "OPERATOR"
+  // SUPER_ADMIN / COMPANY_ADMIN は旧 ADMIN として扱う
+  if (scopeRole === "SUPER_ADMIN" || scopeRole === "COMPANY_ADMIN") return "ADMIN"
+  return scopeRole
 }
 
 async function validateExpenseReady(tx: { id: string; partnerId: string | null; temporaryVendorName: string | null; hasEvidence: boolean; evidenceNotRequired: boolean }) {

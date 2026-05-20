@@ -1,16 +1,12 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
-import { requireSession } from "@/lib/auth-server"
+import { requireSession, requireCompanyAdmin } from "@/lib/auth-server"
 import { revalidatePath } from "next/cache"
-import { getCurrentUserProfile } from "@/app/actions/user-profile"
 
+// 業種マスタは SUPER_ADMIN または COMPANY_ADMIN のみ編集可能
 async function requireAdmin() {
-  await requireSession()
-  const profile = await getCurrentUserProfile()
-  if (profile?.role !== "ADMIN") {
-    throw new Error("業種マスタの編集は管理者のみ実行できます")
-  }
+  await requireCompanyAdmin()
 }
 
 export async function getIndustries() {

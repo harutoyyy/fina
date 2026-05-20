@@ -20,20 +20,21 @@ datasource db {
 // ============================================================
 
 model User {
-  id            String    @id
+  id            String   @id
   name          String
-  email         String    @unique
-  emailVerified Boolean   @default(false)
+  email         String   @unique
+  emailVerified Boolean  @default(false)
   image         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  sessions      Session[]
-  accounts      AuthAccount[]
-  profile       UserProfile?
+  sessions            Session[]
+  accounts            AuthAccount[]
+  profile             UserProfile?
+  passwordResetTokens PasswordResetToken[]
 
-  @@schema("fina")
   @@map("user_fina")
+  @@schema("fina")
 }
 
 model Session {
@@ -46,10 +47,10 @@ model Session {
   userAgent String?
   userId    String
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@schema("fina")
   @@map("session_fina")
+  @@schema("fina")
 }
 
 model AuthAccount {
@@ -67,10 +68,10 @@ model AuthAccount {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@schema("fina")
   @@map("account_fina")
+  @@schema("fina")
 }
 
 model Verification {
@@ -81,36 +82,226 @@ model Verification {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  @@schema("fina")
   @@map("verification_fina")
+  @@schema("fina")
 }
 
 // ============================================================
 // 1. ユーザープロファイル（Better Auth拡張）
+// Phase 1: 認証・権限・申請の DB 基盤
 // ============================================================
 
-enum UserRole {
-  ADMIN
-  OPERATOR
-  VIEWER
+// 旧 UserRole を rename。SUPER_ADMIN を追加し、ADMIN は COMPANY_ADMIN に改名。
+enum ScopeRole {
+  SUPER_ADMIN // システム全社管理者
+  COMPANY_ADMIN // 会社管理者 (旧 ADMIN)
+  OPERATOR // 経理担当者
+  VIEWER // 閲覧者
+
+  @@schema("fina")
+}
+
+// 認証プロバイダ種別 (Phase 6 で PWDX_OIDC に対応予定)
+enum AuthProvider {
+  LOCAL // メアド + パスワード (better-auth)
+  PWDX_OIDC // PWDX SSO
+
+  @@schema("fina")
+}
+
+// 招待状・申請のステータス
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  REVOKED
 
   @@schema("fina")
 }
 
 model UserProfile {
+  id          String    @id @default(cuid())
+  authUserId  String    @unique
+  scopeRole   ScopeRole @default(OPERATOR) // 旧 role
+  displayName String
+
+  // 会社割当 (1人=1会社が原則、 primaryCompanyId が主たる所属)
+  primaryCompanyId   String?
+  assignedCompanyIds String[] // 既存維持。SUPER_ADMIN / 移行期は複数可
+
+  // 認証関連
+  authProvider       AuthProvider @default(LOCAL)
+  externalSub        String?      @unique // PWDX OIDC sub のミラー保管
+  mustChangePassword Boolean      @default(false)
+
+  // 権限テンプレート
+  templateKey         String? // PermissionTemplate.key
+  permissionsOverride Json? // 将来の個別上書き用
+
+  // 招待・ログイン履歴
+  invitedBy   String? // UserProfile.id 自参照
+  lastLoginAt DateTime?
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user            User                @relation(fields: [authUserId], references: [id], onDelete: Cascade)
+  primaryCompany  Company?            @relation("UserProfilePrimaryCompany", fields: [primaryCompanyId], references: [id])
+  template        PermissionTemplate? @relation(fields: [templateKey], references: [key])
+  inviter         UserProfile?        @relation("UserProfileInviter", fields: [invitedBy], references: [id])
+  invitedProfiles UserProfile[]       @relation("UserProfileInviter")
+
+  invitationsSent      UserInvitation[]     @relation("InvitationInviter")
+  reviewedApplications CompanyApplication[] @relation("ApplicationReviewer")
+
+  @@index([primaryCompanyId])
+  @@index([scopeRole])
+  @@index([authProvider])
+  @@map("user_profiles_fina")
+  @@schema("fina")
+}
+
+// 権限テンプレート (Phase 1 で 5 件シード)
+model PermissionTemplate {
+  key          String   @id // "ACCOUNTING_OPERATOR" 等
+  name         String // 表示名
+  description  String?
+  permissions  Json // ["expenses:view","expenses:create",...]
+  isBuiltIn    Boolean  @default(true) // 標準テンプレは編集不可
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profiles    UserProfile[]
+  invitations UserInvitation[]
+
+  @@map("permission_templates_fina")
+  @@schema("fina")
+}
+
+// ユーザー招待状 (Phase 2 で書き込み)
+model UserInvitation {
+  id           String       @id @default(cuid())
+  authProvider AuthProvider // LOCAL or PWDX_OIDC
+  scopeRole    ScopeRole
+  templateKey  String? // OPERATOR/VIEWER の場合必須
+  companyId    String // 招待対象の fina 会社
+  displayName  String
+
+  // LOCAL のみ
+  email               String?
+  initialPasswordHash String?
+  initialPasswordHint String?
+
+  // PWDX_OIDC のみ
+  pwdxCompanyId  String?
+  externalSub    String?
+  externalUserId String?
+  notifyEmail    String?
+
+  invitedBy      String // UserProfile.id
+  invitedAt      DateTime         @default(now())
+  expiresAt      DateTime // 通常 14 日
+  status         InvitationStatus @default(PENDING)
+  acceptedAt     DateTime?
+  acceptedUserId String? // User.id (better-auth)
+
+  inviter  UserProfile         @relation("InvitationInviter", fields: [invitedBy], references: [id])
+  template PermissionTemplate? @relation(fields: [templateKey], references: [key])
+
+  @@index([authProvider, status])
+  @@index([companyId, status])
+  @@index([pwdxCompanyId, externalSub])
+  @@index([pwdxCompanyId, externalUserId])
+  @@index([email, status])
+  @@index([status, expiresAt])
+  @@map("user_invitations_fina")
+  @@schema("fina")
+}
+
+// 会社追加申請 (Phase 2 で書き込み)
+model CompanyApplication {
+  id     String           @id @default(cuid())
+  status InvitationStatus @default(PENDING)
+
+  // 申請者情報
+  applicantName  String
+  applicantEmail String
+  applicantPhone String?
+  notes          String?
+
+  // 会社情報
+  companyName String
+
+  // PWDX 連携
+  usePwdx            Boolean @default(false)
+  pwdxCompanyId      String?
+  pwdxCompanyName    String?
+  externalSub        String?
+  externalUserId     String?
+  pwdxClaimsSnapshot Json?
+
+  // 監査・処理結果
+  createdAt     DateTime  @default(now())
+  reviewedAt    DateTime?
+  reviewedBy    String? // UserProfile.id
+  reviewComment String?
+  expiresAt     DateTime
+
+  // 承認時に作られた参照
+  createdCompanyId String?
+  createdUserId    String? // User.id (better-auth)
+
+  reviewer UserProfile? @relation("ApplicationReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([status, createdAt])
+  @@index([externalSub])
+  @@index([pwdxCompanyId])
+  @@map("company_applications_fina")
+  @@schema("fina")
+}
+
+// PWDX 連携設定 (Phase 5 で UI、Phase 9 で同期実装)
+model PwdxIntegration {
   id              String    @id @default(cuid())
-  authUserId      String    @unique
-  role            UserRole  @default(OPERATOR)
-  displayName     String
-  assignedCompanyIds String[]
-  isActive        Boolean   @default(true)
+  companyId       String    @unique
+  enabled         Boolean   @default(false)
+  pwdxCompanyId   String // PWDX 側企業 ID
+  apiBaseUrl      String?
+  credentialKey   String // KMS 等への参照キー
+  syncFeatures    Json // {partners:true, invoices:true, ...}
+  lastSyncedAt    DateTime?
+  lastSyncStatus  String? // "SUCCESS"|"FAILED"|"RUNNING"
+  lastSyncMessage String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  user            User      @relation(fields: [authUserId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id])
 
+  @@map("pwdx_integrations_fina")
   @@schema("fina")
-  @@map("user_profiles_fina")
+}
+
+// パスワードリセットトークン (Phase 2 で書き込み)
+model PasswordResetToken {
+  id          String    @id @default(cuid())
+  userId      String // better-auth User.id
+  tokenHash   String    @unique // 生トークンの SHA-256 ハッシュ
+  expiresAt   DateTime // 通常 now + 30 分
+  consumedAt  DateTime? // ワンタイム使用済の印
+  requestedBy String? // null = セルフ, UserProfile.id = 管理者代行
+  requestIp   String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, consumedAt])
+  @@index([expiresAt])
+  @@map("password_reset_tokens_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -118,56 +309,58 @@ model UserProfile {
 // ============================================================
 
 model Company {
-  id              String    @id @default(cuid())
-  name            String    // 会社名
-  nameKana        String?   // 会社名フリガナ
-  shortName       String?   // 略称（帳票表示名）
-  industryType    String?   // 業種（旧フィールド・互換のため残存。新規入力は industryMasterId を使用）
-  industryMasterId String?  // 業種マスタID（PDF P10-3）
+  id                  String    @id @default(cuid())
+  name                String // 会社名
+  nameKana            String? // 会社名フリガナ
+  shortName           String? // 略称（帳票表示名）
+  industryType        String? // 業種（旧フィールド・互換のため残存。新規入力は industryMasterId を使用）
+  industryMasterId    String? // 業種マスタID（PDF P10-3）
   representativeTitle String? // 代表者役職
   representativeName  String? // 代表者氏名
-  postalCode      String?   // 郵便番号
+  postalCode          String? // 郵便番号
   addressPrefecture   String? // 都道府県
-  addressCity     String?   // 市区町村
-  addressStreet   String?   // 番地
-  addressBuilding String?   // 建物名
-  phone           String?   // 電話番号
-  fax             String?   // FAX番号
-  email           String?   // 代表メールアドレス
-  website         String?   // WebサイトURL
-  corporateNumber String?   // 法人番号（13桁）
-  invoiceNumber   String?   // インボイス登録番号
-  eTaxNumber      String?   // e-Tax利用者識別番号（PDF P1 会社情報一覧）
-  capitalAmount   BigInt?   // 資本金（円）（PDF P1 会社情報一覧）
-  accountingManager String? // 経理担当者名（PDF P1 会社情報一覧）
-  fiscalMonth     Int       @default(3) // 決算月（1〜12）
-  establishedDate DateTime? // 設立日
-  status          String    @default("ACTIVE") // ACTIVE/DORMANT/LIQUIDATING
-  mainAccountId   String?   // メイン口座ID（口座マスタ参照）
-  defaultAssigneeId String? // 経費確認BOXのデフォルト担当
-  displayOrder    Int       @default(0) // 表示順
-  notes           String?   // 備考
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  addressCity         String? // 市区町村
+  addressStreet       String? // 番地
+  addressBuilding     String? // 建物名
+  phone               String? // 電話番号
+  fax                 String? // FAX番号
+  email               String? // 代表メールアドレス
+  website             String? // WebサイトURL
+  corporateNumber     String? // 法人番号（13桁）
+  invoiceNumber       String? // インボイス登録番号
+  eTaxNumber          String? // e-Tax利用者識別番号（PDF P1 会社情報一覧）
+  capitalAmount       BigInt? // 資本金（円）（PDF P1 会社情報一覧）
+  accountingManager   String? // 経理担当者名（PDF P1 会社情報一覧）
+  fiscalMonth         Int       @default(3) // 決算月（1〜12）
+  establishedDate     DateTime? // 設立日
+  status              String    @default("ACTIVE") // ACTIVE/DORMANT/LIQUIDATING
+  mainAccountId       String? // メイン口座ID（口座マスタ参照）
+  defaultAssigneeId   String? // 経費確認BOXのデフォルト担当
+  displayOrder        Int       @default(0) // 表示順
+  notes               String? // 備考
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   // Relations
-  accounts        Account[]
-  tradingPartners TradingPartner[]
-  payrollGroups   PayrollGroup[]
-  transactions    Transaction[]
-  monthlyBalances MonthlyBalance[]
-  loanContracts   LoanContract[]
-  leaseContracts  LeaseContract[]
-  recurringTemplates RecurringTemplate[]
-  monthCloses     MonthClose[]
+  accounts                  Account[]
+  tradingPartners           TradingPartner[]
+  payrollGroups             PayrollGroup[]
+  transactions              Transaction[]
+  monthlyBalances           MonthlyBalance[]
+  loanContracts             LoanContract[]
+  leaseContracts            LeaseContract[]
+  recurringTemplates        RecurringTemplate[]
+  monthCloses               MonthClose[]
   reconciliationCheckpoints ReconciliationCheckpoint[]
-  financialReports FinancialReport[]
-  journalEntriesDr JournalEntry[] @relation("JournalEntryDrCompany")
-  journalEntriesCr JournalEntry[] @relation("JournalEntryCrCompany")
-  industryMaster  IndustryMaster? @relation(fields: [industryMasterId], references: [id])
+  financialReports          FinancialReport[]
+  journalEntriesDr          JournalEntry[]             @relation("JournalEntryDrCompany")
+  journalEntriesCr          JournalEntry[]             @relation("JournalEntryCrCompany")
+  primaryUsers              UserProfile[]              @relation("UserProfilePrimaryCompany")
+  pwdxIntegration           PwdxIntegration?
+  industryMaster            IndustryMaster?            @relation(fields: [industryMasterId], references: [id])
 
-  @@schema("fina")
   @@map("companies_fina")
+  @@schema("fina")
 }
 
 // 業種マスタ（PDF P10-3 建設/広告/その他、追加可）
@@ -181,10 +374,10 @@ model IndustryMaster {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  companies    Company[]
+  companies Company[]
 
-  @@schema("fina")
   @@map("industry_masters_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -192,63 +385,63 @@ model IndustryMaster {
 // ============================================================
 
 enum AccountType {
-  ORDINARY    // 普通預金
-  TERM        // 定期預金
-  SOCIAL_INSURANCE_RESERVE  // 社会保険積立（仮想口座）
-  CONSUMPTION_TAX_RESERVE   // 消費税積立（仮想口座）
+  ORDINARY // 普通預金
+  TERM // 定期預金
+  SOCIAL_INSURANCE_RESERVE // 社会保険積立（仮想口座）
+  CONSUMPTION_TAX_RESERVE // 消費税積立（仮想口座）
 
   @@schema("fina")
 }
 
 model Account {
-  id              String      @id @default(cuid())
-  companyId       String
-  bankName        String?     // 銀行名
-  bankCode        String?     // 銀行コード
-  branchName      String?     // 支店名
-  branchCode      String?     // 支店コード
-  accountNumber   String?     // 口座番号
-  accountType     AccountType // 口座種別
-  accountHolder   String?     // 名義カナ（半角）
-  isMain          Boolean     @default(false) // メイン口座フラグ
-  isVirtual       Boolean     @default(false) // 仮想口座フラグ
-  isActive        Boolean     @default(true)  // 有効フラグ
-  isVisible       Boolean     @default(true)  // 表示フラグ
-  displayOrder    Int         @default(0)
+  id            String        @id @default(cuid())
+  companyId     String
+  bankName      String? // 銀行名
+  bankCode      String? // 銀行コード
+  branchName    String? // 支店名
+  branchCode    String? // 支店コード
+  accountNumber String? // 口座番号
+  accountType   AccountType // 口座種別
+  accountHolder String? // 名義カナ（半角）
+  isMain        Boolean       @default(false) // メイン口座フラグ
+  isVirtual     Boolean       @default(false) // 仮想口座フラグ
+  isActive      Boolean       @default(true) // 有効フラグ
+  isVisible     Boolean       @default(true) // 表示フラグ
+  displayOrder  Int           @default(0)
   // 口座の役割（複数選択可）
-  roles           AccountRole[]
+  roles         AccountRole[]
   // FB出力設定
-  fbSettings      Json?       // {purpose: "general"|"salary"|"bonus", requesterCode, ...}
+  fbSettings    Json? // {purpose: "general"|"salary"|"bonus", requesterCode, ...}
   // 手数料設定
-  feeSettings     Json?       // {sameBranch: {ranges: [{max, fee}]}, otherBranch: ...}
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  feeSettings   Json? // {sameBranch: {ranges: [{max, fee}]}, otherBranch: ...}
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
-  company         Company     @relation(fields: [companyId], references: [id])
-  transactions    Transaction[]
-  monthlyBalances MonthlyBalance[]
+  company                   Company                    @relation(fields: [companyId], references: [id])
+  transactions              Transaction[]
+  monthlyBalances           MonthlyBalance[]
   // 資金移動先として
-  fundTransfersFrom FundTransfer[] @relation("TransferFrom")
-  fundTransfersTo   FundTransfer[] @relation("TransferTo")
+  fundTransfersFrom         FundTransfer[]             @relation("TransferFrom")
+  fundTransfersTo           FundTransfer[]             @relation("TransferTo")
   reconciliationCheckpoints ReconciliationCheckpoint[]
 
-  @@schema("fina")
   @@map("accounts_fina")
+  @@schema("fina")
 }
 
 // 口座の役割マスタ
 model AccountRole {
-  id          String  @id @default(cuid())
-  accountId   String
-  roleKey     String  // "SALARY_PAYMENT", "EXPENSE_PAYMENT", "INCOME_RECEIPT" etc.
-  roleName    String  // 表示名
-  isActive    Boolean @default(true)
+  id        String  @id @default(cuid())
+  accountId String
+  roleKey   String // "SALARY_PAYMENT", "EXPENSE_PAYMENT", "INCOME_RECEIPT" etc.
+  roleName  String // 表示名
+  isActive  Boolean @default(true)
 
-  account     Account @relation(fields: [accountId], references: [id])
+  account Account @relation(fields: [accountId], references: [id])
 
   @@unique([accountId, roleKey])
-  @@schema("fina")
   @@map("account_roles_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -256,21 +449,21 @@ model AccountRole {
 // ============================================================
 
 model MonthlyBalance {
-  id              String  @id @default(cuid())
-  companyId       String
-  accountId       String
-  yearMonth       String  // "YYYY-MM"
-  openingBalance  BigInt  @default(0) // 期首残高（円）
-  closingBalance  BigInt  @default(0) // 期末残高（円）
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String   @id @default(cuid())
+  companyId      String
+  accountId      String
+  yearMonth      String // "YYYY-MM"
+  openingBalance BigInt   @default(0) // 期首残高（円）
+  closingBalance BigInt   @default(0) // 期末残高（円）
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  company         Company  @relation(fields: [companyId], references: [id])
-  account         Account  @relation(fields: [accountId], references: [id])
+  company Company @relation(fields: [companyId], references: [id])
+  account Account @relation(fields: [accountId], references: [id])
 
   @@unique([accountId, yearMonth])
-  @@schema("fina")
   @@map("monthly_balances_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -279,55 +472,55 @@ model MonthlyBalance {
 
 // 大項目（PL区分）
 model AccountCategoryMajor {
-  id          String  @id @default(cuid())
-  name        String  // 売上高, 売上原価, 販売管理費, 営業外収益, 営業外費用, その他費用
-  direction   String  // "INCOME" or "EXPENSE"
-  displayOrder Int    @default(0)
-  isActive    Boolean @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  name         String // 売上高, 売上原価, 販売管理費, 営業外収益, 営業外費用, その他費用
+  direction    String // "INCOME" or "EXPENSE"
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   midCategories AccountCategoryMid[]
 
-  @@schema("fina")
   @@map("account_category_majors_fina")
+  @@schema("fina")
 }
 
 // 中項目（勘定科目）
 model AccountCategoryMid {
-  id          String  @id @default(cuid())
-  majorId     String
-  name        String  // 通信費, 地代家賃, 旅費交通費, etc.
-  displayOrder Int    @default(0)
-  isActive    Boolean @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  majorId      String
+  name         String // 通信費, 地代家賃, 旅費交通費, etc.
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  major       AccountCategoryMajor @relation(fields: [majorId], references: [id])
-  subCategories AccountCategorySub[]
-  transactionDetails TransactionDetail[]
+  major                  AccountCategoryMajor    @relation(fields: [majorId], references: [id])
+  subCategories          AccountCategorySub[]
+  transactionDetails     TransactionDetail[]
   defaultPartnerMappings TradingPartnerDefault[]
 
-  @@schema("fina")
   @@map("account_category_mids_fina")
+  @@schema("fina")
 }
 
 // 小項目（補助科目）
 model AccountCategorySub {
-  id          String  @id @default(cuid())
-  midId       String
-  name        String  // 電気代, ガス代, 携帯電話, etc.
-  displayOrder Int    @default(0)
-  isActive    Boolean @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(cuid())
+  midId        String
+  name         String // 電気代, ガス代, 携帯電話, etc.
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  mid         AccountCategoryMid @relation(fields: [midId], references: [id])
-  transactionDetails TransactionDetail[]
+  mid                    AccountCategoryMid      @relation(fields: [midId], references: [id])
+  transactionDetails     TransactionDetail[]
   defaultPartnerMappings TradingPartnerDefault[]
 
-  @@schema("fina")
   @@map("account_category_subs_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -335,96 +528,102 @@ model AccountCategorySub {
 // ============================================================
 
 enum TradingPartnerType {
-  CUSTOMER   // 請求先
-  VENDOR     // 支払先
-  BOTH       // 双方
+  CUSTOMER // 請求先
+  VENDOR // 支払先
+  BOTH // 双方
 
   @@schema("fina")
 }
 
 model TradingPartner {
-  id              String             @id @default(cuid())
-  companyId       String
-  name            String
-  nameKana        String?
-  type            TradingPartnerType
+  id             String             @id @default(cuid())
+  companyId      String
+  name           String
+  nameKana       String?
+  type           TradingPartnerType
   // タグ（内部キー固定 + 表示名変更可）
-  tagKey          String             // "CUSTOMER","SUBCONTRACTOR","EXPENSE","BANK","GROUP_COMPANY","OTHER"
-  tagDisplayName  String?            // 管理者が変更可能な表示名
-  isActive        Boolean            @default(true)
-  notes           String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  tagKey         String // "CUSTOMER","SUBCONTRACTOR","EXPENSE","BANK","GROUP_COMPANY","OTHER"
+  tagDisplayName String? // 管理者が変更可能な表示名
+  isActive       Boolean            @default(true)
+  notes          String?
 
-  company         Company            @relation(fields: [companyId], references: [id])
-  bankAccounts    TradingPartnerBankAccount[]
-  defaults        TradingPartnerDefault[]
-  sites           TradingPartnerSite[]
-  transactions    Transaction[]
+  // データ連携用 (Phase 9 PWDX 同期で使用)
+  externalSource String? // "pwdx" | "fina"
+  externalId     String? // PWDX 側 ID (externalSource とのペアでユニーク)
 
-  @@schema("fina")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company      Company                     @relation(fields: [companyId], references: [id])
+  bankAccounts TradingPartnerBankAccount[]
+  defaults     TradingPartnerDefault[]
+  sites        TradingPartnerSite[]
+  transactions Transaction[]
+
+  @@unique([externalSource, externalId])
   @@map("trading_partners_fina")
+  @@schema("fina")
 }
 
 // 取引先の振込先口座（複数登録可）
 model TradingPartnerBankAccount {
-  id              String  @id @default(cuid())
-  partnerId       String
-  bankCode        String  // 銀行コード
-  branchCode      String  // 支店コード
-  accountType     String  // "ORDINARY", "CURRENT"
-  accountNumber   String  // 口座番号
-  accountHolder   String  // 名義カナ（半角）
-  isActive        Boolean @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id            String   @id @default(cuid())
+  partnerId     String
+  bankCode      String // 銀行コード
+  branchCode    String // 支店コード
+  accountType   String // "ORDINARY", "CURRENT"
+  accountNumber String // 口座番号
+  accountHolder String // 名義カナ（半角）
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  partner         TradingPartner @relation(fields: [partnerId], references: [id])
+  partner TradingPartner @relation(fields: [partnerId], references: [id])
 
-  @@schema("fina")
   @@map("trading_partner_bank_accounts_fina")
+  @@schema("fina")
 }
 
 // 取引先デフォルト科目
 model TradingPartnerDefault {
-  id          String  @id @default(cuid())
-  partnerId   String
-  midId       String
-  subId       String?
+  id        String  @id @default(cuid())
+  partnerId String
+  midId     String
+  subId     String?
 
-  partner     TradingPartner   @relation(fields: [partnerId], references: [id])
-  mid         AccountCategoryMid @relation(fields: [midId], references: [id])
-  sub         AccountCategorySub? @relation(fields: [subId], references: [id])
+  partner TradingPartner      @relation(fields: [partnerId], references: [id])
+  mid     AccountCategoryMid  @relation(fields: [midId], references: [id])
+  sub     AccountCategorySub? @relation(fields: [subId], references: [id])
 
   @@unique([partnerId])
-  @@schema("fina")
   @@map("trading_partner_defaults_fina")
+  @@schema("fina")
 }
 
 // 取引先 > 契約/地点テンプレ（任意）
 model TradingPartnerSite {
-  id              String  @id @default(cuid())
-  partnerId       String
-  siteName        String  // 地点名（物件名）
+  id             String   @id @default(cuid())
+  partnerId      String
+  siteName       String // 地点名（物件名）
   // 定期生成設定
-  frequency       String? // "MONTHLY","BIMONTHLY_ODD","BIMONTHLY_EVEN","QUARTERLY","YEARLY","SPECIFIC_MONTHS"
-  specificMonths  Int[]   // 特定月指定の場合
-  startMonth      Int?    // 開始月
-  dueDayRule      String? // "MONTH_END", "DAY_15" etc.
-  holidayAdjust   String? // "PREV_BUSINESS","NEXT_BUSINESS","NONE"
-  amountType      String? // "FIXED","VARIABLE","MANUAL"
-  fixedAmount     BigInt? // 固定金額
-  assigneeId      String? // 担当者ID
-  midId           String? // デフォルト中項目
-  subId           String? // デフォルト小項目
-  isActive        Boolean @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  frequency      String? // "MONTHLY","BIMONTHLY_ODD","BIMONTHLY_EVEN","QUARTERLY","YEARLY","SPECIFIC_MONTHS"
+  specificMonths Int[] // 特定月指定の場合
+  startMonth     Int? // 開始月
+  dueDayRule     String? // "MONTH_END", "DAY_15" etc.
+  holidayAdjust  String? // "PREV_BUSINESS","NEXT_BUSINESS","NONE"
+  amountType     String? // "FIXED","VARIABLE","MANUAL"
+  fixedAmount    BigInt? // 固定金額
+  assigneeId     String? // 担当者ID
+  midId          String? // デフォルト中項目
+  subId          String? // デフォルト小項目
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  partner         TradingPartner @relation(fields: [partnerId], references: [id])
+  partner TradingPartner @relation(fields: [partnerId], references: [id])
 
-  @@schema("fina")
   @@map("trading_partner_sites_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -432,142 +631,147 @@ model TradingPartnerSite {
 // ============================================================
 
 enum TransactionType {
-  EXPENSE        // 経費
-  SALES          // 売上
-  COST_PAYMENT   // 原価支払
-  SALARY         // 給与
-  LOAN           // 借入
-  TRANSFER       // 振替（内部資金移動・積立等）
+  EXPENSE // 経費
+  SALES // 売上
+  COST_PAYMENT // 原価支払
+  SALARY // 給与
+  LOAN // 借入
+  TRANSFER // 振替（内部資金移動・積立等）
 
   @@schema("fina")
 }
 
 enum TransactionStatus {
-  DRAFT          // 下書き
-  READY          // 準備完了
-  CONFIRMED      // 確定済
-  CANCELLED      // 取消済
+  DRAFT // 下書き
+  READY // 準備完了
+  CONFIRMED // 確定済
+  CANCELLED // 取消済
 
   @@schema("fina")
 }
 
 enum PaymentMethod {
-  BANK_TRANSFER  // 振込
-  DIRECT_DEBIT   // 引落
+  BANK_TRANSFER // 振込
+  DIRECT_DEBIT // 引落
   CASH_WITHDRAWAL // 現金引出
 
   @@schema("fina")
 }
 
 model Transaction {
-  id              String            @id @default(cuid())
-  companyId       String
-  accountId       String            // 対象口座
-  partnerId       String?           // 取引先
-  type            TransactionType
-  status          TransactionStatus @default(DRAFT)
+  id        String            @id @default(cuid())
+  companyId String
+  accountId String // 対象口座
+  partnerId String? // 取引先
+  type      TransactionType
+  status    TransactionStatus @default(DRAFT)
 
   // 日付
-  transactionDate DateTime?         // 実出納日（実際の入出金日）
-  scheduledDate   DateTime?         // 予定日
-  accountingMonth String            // 計上月 "YYYY-MM"
+  transactionDate DateTime? // 実出納日（実際の入出金日）
+  scheduledDate   DateTime? // 予定日
+  accountingMonth String // 計上月 "YYYY-MM"
 
   // 金額（親の合計は子明細から自動算出）
-  amount          BigInt            @default(0) // 入金は正、支出は負
-  estimatedAmount BigInt?           // 予定金額
-  actualAmount    BigInt?           // 実績金額
+  amount          BigInt  @default(0) // 入金は正、支出は負
+  estimatedAmount BigInt? // 予定金額
+  actualAmount    BigInt? // 実績金額
 
   // 属性
-  paymentMethod   PaymentMethod?
-  classification  String?           // "FIXED","VARIABLE","TEMPORARY" (固定/変動/臨時)
-  summary         String?           // 摘要
-  displayOrder    Int               @default(0) // 資金繰り表内の表示順
+  paymentMethod  PaymentMethod?
+  classification String? // "FIXED","VARIABLE","TEMPORARY" (固定/変動/臨時)
+  summary        String? // 摘要
+  displayOrder   Int            @default(0) // 資金繰り表内の表示順
 
   // 確定関連
-  confirmedAt     DateTime?
-  confirmedBy     String?
-  readyAt         DateTime?
-  readyBy         String?
+  confirmedAt DateTime?
+  confirmedBy String?
+  readyAt     DateTime?
+  readyBy     String?
 
   // 売上固有
-  invoiceDate     DateTime?         // 請求締め日
-  invoiceAmount   BigInt?           // 請求金額
+  invoiceDate   DateTime? // 請求締め日
+  invoiceAmount BigInt? // 請求金額
 
   // 原価固有
-  recordedAmount  BigInt?           // 計上額（控除前）
-  transferAmount  BigInt?           // 振込額（実支払）
+  recordedAmount BigInt? // 計上額（控除前）
+  transferAmount BigInt? // 振込額（実支払）
 
   // リンク（会社間取引・資金移動の双方向参照）
-  linkedTransactionId String?       // 相手取引ID
-  parentId        String?           // 親取引ID（子明細の場合）
-  cashWithdrawalBatchId String?     // 現金引出バッチID
+  linkedTransactionId   String? // 相手取引ID
+  parentId              String? // 親取引ID（子明細の場合）
+  cashWithdrawalBatchId String? // 現金引出バッチID
 
   // 証憑
-  hasEvidence     Boolean           @default(false)
-  evidenceNotRequired Boolean       @default(false) // 証憑なしOK（管理者のみ付与可）
+  hasEvidence         Boolean @default(false)
+  evidenceNotRequired Boolean @default(false) // 証憑なしOK（管理者のみ付与可）
 
   // 受領
-  receivedDate    DateTime?         // 受領日（証憑添付時に自動セット、手修正可）
+  receivedDate DateTime? // 受領日（証憑添付時に自動セット、手修正可）
 
   // 仮取引先
-  temporaryVendorName String?       // 仮取引先名（partnerId 未設定時に使用）
+  temporaryVendorName String? // 仮取引先名（partnerId 未設定時に使用）
 
   // 繰り返しテンプレートとの紐付け
-  recurringTemplateId String?       // 繰り返しテンプレートID
+  recurringTemplateId String? // 繰り返しテンプレートID
 
   // 例外フラグ
-  isDateException Boolean           @default(false) // 入力者が実行予定日を手変更した場合 true
+  isDateException Boolean @default(false) // 入力者が実行予定日を手変更した場合 true
+
+  // データ連携用 (Phase 9 PWDX 同期で使用)
+  externalSource String? // "pwdx" | "manual" | "xlsx" | "ocr" など
+  externalRef    String? // PWDX 請求/発注 ID 等の外部参照 ID (冪等キー)
 
   // メタ
-  amountUpdatedAt DateTime?         // 金額変更日時
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  amountUpdatedAt DateTime? // 金額変更日時
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   // Relations
-  company         Company           @relation(fields: [companyId], references: [id])
-  account         Account           @relation(fields: [accountId], references: [id])
-  partner         TradingPartner?   @relation(fields: [partnerId], references: [id])
-  parent          Transaction?      @relation("TransactionChildren", fields: [parentId], references: [id])
-  children        Transaction[]     @relation("TransactionChildren")
-  details         TransactionDetail[]
-  evidences       Evidence[]
+  company              Company               @relation(fields: [companyId], references: [id])
+  account              Account               @relation(fields: [accountId], references: [id])
+  partner              TradingPartner?       @relation(fields: [partnerId], references: [id])
+  parent               Transaction?          @relation("TransactionChildren", fields: [parentId], references: [id])
+  children             Transaction[]         @relation("TransactionChildren")
+  details              TransactionDetail[]
+  evidences            Evidence[]
   temporaryBankAccount TemporaryBankAccount?
-  cashWithdrawal  CashWithdrawalBatch? @relation("BatchTransactions", fields: [cashWithdrawalBatchId], references: [id])
-  fundTransfer    FundTransfer?
-  recurringTemplate RecurringTemplate? @relation(fields: [recurringTemplateId], references: [id])
+  cashWithdrawal       CashWithdrawalBatch?  @relation("BatchTransactions", fields: [cashWithdrawalBatchId], references: [id])
+  fundTransfer         FundTransfer?
+  recurringTemplate    RecurringTemplate?    @relation(fields: [recurringTemplateId], references: [id])
 
   @@index([companyId, accountId, accountingMonth])
   @@index([recurringTemplateId])
   @@index([companyId, type, accountingMonth])
   @@index([parentId])
-  @@schema("fina")
+  @@index([externalSource, externalRef])
   @@map("transactions_fina")
+  @@schema("fina")
 }
 
 // 取引明細（子）
 model TransactionDetail {
-  id              String  @id @default(cuid())
-  transactionId   String
-  midId           String? // 中項目（勘定科目）
-  subId           String? // 小項目（補助科目）
-  amount          BigInt  @default(0)
-  classification  String? // "FIXED","VARIABLE","TEMPORARY"
-  summary         String? // 摘要
+  id                  String   @id @default(cuid())
+  transactionId       String
+  midId               String? // 中項目（勘定科目）
+  subId               String? // 小項目（補助科目）
+  amount              BigInt   @default(0)
+  classification      String? // "FIXED","VARIABLE","TEMPORARY"
+  summary             String? // 摘要
   // 控除カテゴリ（売上・原価の控除明細用）
   deductionCategoryId String? // 控除カテゴリマスタ参照
   deductionSubType    String? // 発生/相殺 等
-  signMultiplier  Int     @default(1) // 1 or -1（符号自動決定用）
-  displayOrder    Int     @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  signMultiplier      Int      @default(1) // 1 or -1（符号自動決定用）
+  displayOrder        Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  transaction     Transaction        @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  mid             AccountCategoryMid? @relation(fields: [midId], references: [id])
-  sub             AccountCategorySub? @relation(fields: [subId], references: [id])
+  transaction Transaction         @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  mid         AccountCategoryMid? @relation(fields: [midId], references: [id])
+  sub         AccountCategorySub? @relation(fields: [subId], references: [id])
 
   @@index([transactionId])
-  @@schema("fina")
   @@map("transaction_details_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -575,24 +779,24 @@ model TransactionDetail {
 // ============================================================
 
 model Evidence {
-  id              String  @id @default(cuid())
-  transactionId   String
-  fileName        String
-  fileUrl         String  // Storage path
-  fileSize        Int?
-  mimeType        String?
-  uploadedBy      String
-  uploadedAt      DateTime @default(now())
+  id            String   @id @default(cuid())
+  transactionId String
+  fileName      String
+  fileUrl       String // Storage path
+  fileSize      Int?
+  mimeType      String?
+  uploadedBy    String
+  uploadedAt    DateTime @default(now())
 
   // T-11: メタ情報（手入力 or OCR）
   metaTransactionDate DateTime? // 証憑上の取引日
-  metaVendorName      String?   // 証憑上の取引先名
-  metaAmount          BigInt?   // 証憑上の金額
+  metaVendorName      String? // 証憑上の取引先名
+  metaAmount          BigInt? // 証憑上の金額
 
-  transaction     Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 
-  @@schema("fina")
   @@map("evidences_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -600,31 +804,31 @@ model Evidence {
 // ============================================================
 
 model PayrollGroup {
-  id              String  @id @default(cuid())
-  companyId       String
-  name            String  // 区分名（例：工事部門、営業部門）
-  costType        String  // "COST"（原価）or "SGA"（販管費）or "OUTSOURCE"（外注）
-  midId           String? // 紐づく中項目
+  id                   String   @id @default(cuid())
+  companyId            String
+  name                 String // 区分名（例：工事部門、営業部門）
+  costType             String // "COST"（原価）or "SGA"（販管費）or "OUTSOURCE"（外注）
+  midId                String? // 紐づく中項目
   // 支給日設定
-  payDay          Int?    // 支給日（25, 27等）
-  payDayIsMonthEnd Boolean @default(false) // 月末フラグ
-  holidayAdjust   String? // "PREV_BUSINESS","NEXT_BUSINESS"
+  payDay               Int? // 支給日（25, 27等）
+  payDayIsMonthEnd     Boolean  @default(false) // 月末フラグ
+  holidayAdjust        String? // "PREV_BUSINESS","NEXT_BUSINESS"
   // デフォルト口座
-  defaultAccountId String? // デフォルト振込口座
+  defaultAccountId     String? // デフォルト振込口座
   defaultCashAccountId String? // デフォルト現金引出口座
   // 控除セット
-  deductionPresets Json?   // [{name, midId, subId}]
-  headcount       Int     @default(0) // 人数
-  isActive        Boolean @default(true)
-  displayOrder    Int     @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  deductionPresets     Json? // [{name, midId, subId}]
+  headcount            Int      @default(0) // 人数
+  isActive             Boolean  @default(true)
+  displayOrder         Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  company         Company  @relation(fields: [companyId], references: [id])
-  salaryEntries   SalaryEntry[]
+  company       Company       @relation(fields: [companyId], references: [id])
+  salaryEntries SalaryEntry[]
 
-  @@schema("fina")
   @@map("payroll_groups_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -632,75 +836,75 @@ model PayrollGroup {
 // ============================================================
 
 model SalaryEntry {
-  id              String  @id @default(cuid())
-  payrollGroupId  String
-  payMonth        String  // 支給月 "YYYY-MM"
-  payDate         DateTime? // 支給日
+  id             String    @id @default(cuid())
+  payrollGroupId String
+  payMonth       String // 支給月 "YYYY-MM"
+  payDate        DateTime? // 支給日
 
   // 支給項目
-  taxablePayment  BigInt  @default(0) // 課税支給
+  taxablePayment     BigInt @default(0) // 課税支給
   transportAllowance BigInt @default(0) // 交通費
-  miscExpenses    BigInt  @default(0) // 諸経費
-  carryoverAdjust BigInt  @default(0) // 繰越金調整
-  advanceExpenses BigInt  @default(0) // 立替経費
-  totalPayment    BigInt  @default(0) // 総支給（自動計算）
+  miscExpenses       BigInt @default(0) // 諸経費
+  carryoverAdjust    BigInt @default(0) // 繰越金調整
+  advanceExpenses    BigInt @default(0) // 立替経費
+  totalPayment       BigInt @default(0) // 総支給（自動計算）
 
   // 自動積立計算
   socialInsuranceReserve BigInt @default(0) // 社保積立（課税支給×15%）
   consumptionTaxReserve  BigInt @default(0) // 消費税積立（課税支給×10%）
 
   // 控除合計・差引支給
-  totalDeduction  BigInt  @default(0) // 控除合計
-  netPayment      BigInt  @default(0) // 差引支給（総支給-控除合計）
+  totalDeduction BigInt @default(0) // 控除合計
+  netPayment     BigInt @default(0) // 差引支給（総支給-控除合計）
 
-  headcount       Int     @default(0) // 人数
+  headcount Int @default(0) // 人数
 
-  status          TransactionStatus @default(DRAFT)
-  confirmedAt     DateTime?
-  confirmedBy     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  status      TransactionStatus @default(DRAFT)
+  confirmedAt DateTime?
+  confirmedBy String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 
-  payrollGroup    PayrollGroup @relation(fields: [payrollGroupId], references: [id])
-  deductions      SalaryDeduction[]
-  paymentDetails  SalaryPaymentDetail[]
+  payrollGroup   PayrollGroup          @relation(fields: [payrollGroupId], references: [id])
+  deductions     SalaryDeduction[]
+  paymentDetails SalaryPaymentDetail[]
 
   @@unique([payrollGroupId, payMonth])
-  @@schema("fina")
   @@map("salary_entries_fina")
+  @@schema("fina")
 }
 
 // 給与控除明細
 model SalaryDeduction {
-  id              String  @id @default(cuid())
-  salaryEntryId   String
-  itemName        String  // 控除項目名（家賃控除、貸金控除、etc.）
-  amount          BigInt  @default(0)
-  midId           String? // 紐づく中項目
-  subId           String? // 紐づく小項目
-  contentRows     Json?   // 内容行（複数行）[{description, amount}]
-  displayOrder    Int     @default(0)
+  id            String  @id @default(cuid())
+  salaryEntryId String
+  itemName      String // 控除項目名（家賃控除、貸金控除、etc.）
+  amount        BigInt  @default(0)
+  midId         String? // 紐づく中項目
+  subId         String? // 紐づく小項目
+  contentRows   Json? // 内容行（複数行）[{description, amount}]
+  displayOrder  Int     @default(0)
 
-  salaryEntry     SalaryEntry @relation(fields: [salaryEntryId], references: [id], onDelete: Cascade)
+  salaryEntry SalaryEntry @relation(fields: [salaryEntryId], references: [id], onDelete: Cascade)
 
-  @@schema("fina")
   @@map("salary_deductions_fina")
+  @@schema("fina")
 }
 
 // 給与 支払内訳（出金イベント）
 model SalaryPaymentDetail {
-  id              String  @id @default(cuid())
-  salaryEntryId   String
-  paymentDate     DateTime // 出金日（実出納日）
-  paymentMethod   PaymentMethod
-  accountId       String?  // 出金口座
-  amount          BigInt   @default(0)
-  displayOrder    Int      @default(0)
+  id            String        @id @default(cuid())
+  salaryEntryId String
+  paymentDate   DateTime // 出金日（実出納日）
+  paymentMethod PaymentMethod
+  accountId     String? // 出金口座
+  amount        BigInt        @default(0)
+  displayOrder  Int           @default(0)
 
-  salaryEntry     SalaryEntry @relation(fields: [salaryEntryId], references: [id], onDelete: Cascade)
+  salaryEntry SalaryEntry @relation(fields: [salaryEntryId], references: [id], onDelete: Cascade)
 
-  @@schema("fina")
   @@map("salary_payment_details_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -708,20 +912,20 @@ model SalaryPaymentDetail {
 // ============================================================
 
 model DeductionCategory {
-  id              String  @id @default(cuid())
-  forType         String  // "SALES" or "COST"
-  name            String  // カテゴリ名
-  midId           String  // デフォルト中項目
-  subId           String? // デフォルト小項目
-  hasSubTypes     Boolean @default(false) // 発生/相殺の小項目を持つか
-  signRule        Json?   // 符号ルール {occurrence: 1, offset: -1}
-  isActive        Boolean @default(true)
-  displayOrder    Int     @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           String   @id @default(cuid())
+  forType      String // "SALES" or "COST"
+  name         String // カテゴリ名
+  midId        String // デフォルト中項目
+  subId        String? // デフォルト小項目
+  hasSubTypes  Boolean  @default(false) // 発生/相殺の小項目を持つか
+  signRule     Json? // 符号ルール {occurrence: 1, offset: -1}
+  isActive     Boolean  @default(true)
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  @@schema("fina")
   @@map("deduction_categories_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -729,24 +933,24 @@ model DeductionCategory {
 // ============================================================
 
 model FundTransfer {
-  id              String  @id @default(cuid())
-  transactionId   String  @unique // 紐づく取引
-  fromAccountId   String  // 移動元口座
-  toAccountId     String  // 移動先口座
-  transferDate    DateTime // 移動日
-  amount          BigInt  // 金額
+  id                   String   @id @default(cuid())
+  transactionId        String   @unique // 紐づく取引
+  fromAccountId        String // 移動元口座
+  toAccountId          String // 移動先口座
+  transferDate         DateTime // 移動日
+  amount               BigInt // 金額
   // 会社間資金移動の場合
-  counterCompanyId    String? // 相手会社ID
+  counterCompanyId     String? // 相手会社ID
   counterTransactionId String? // 相手側の取引ID
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  transaction     Transaction @relation(fields: [transactionId], references: [id])
-  fromAccount     Account     @relation("TransferFrom", fields: [fromAccountId], references: [id])
-  toAccount       Account     @relation("TransferTo", fields: [toAccountId], references: [id])
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  fromAccount Account     @relation("TransferFrom", fields: [fromAccountId], references: [id])
+  toAccount   Account     @relation("TransferTo", fields: [toAccountId], references: [id])
 
-  @@schema("fina")
   @@map("fund_transfers_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -754,50 +958,50 @@ model FundTransfer {
 // ============================================================
 
 model CashWithdrawalBatch {
-  id              String  @id @default(cuid())
-  companyId       String
-  accountId       String  // 引出口座
-  withdrawalDate  DateTime // 引出日
-  totalAmount     BigInt  // 引出金額
+  id             String   @id @default(cuid())
+  companyId      String
+  accountId      String // 引出口座
+  withdrawalDate DateTime // 引出日
+  totalAmount    BigInt // 引出金額
 
-  status          TransactionStatus @default(DRAFT)
-  confirmedAt     DateTime?
-  confirmedBy     String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  status      TransactionStatus @default(DRAFT)
+  confirmedAt DateTime?
+  confirmedBy String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 
   // 用途明細（リンク先取引）
-  linkedTransactions Transaction[] @relation("BatchTransactions")
+  linkedTransactions Transaction[]      @relation("BatchTransactions")
   // 金種表
-  denominations   CashDenomination[]
+  denominations      CashDenomination[]
 
-  @@schema("fina")
   @@map("cash_withdrawal_batches_fina")
+  @@schema("fina")
 }
 
 // 金種表
 model CashDenomination {
-  id              String  @id @default(cuid())
-  batchId         String
+  id           String  @id @default(cuid())
+  batchId      String
   // 各金種の枚数
-  yen10000        Int     @default(0)
-  yen5000         Int     @default(0)
-  yen2000         Int     @default(0)
-  yen1000         Int     @default(0)
-  yen500          Int     @default(0)
-  yen100          Int     @default(0)
-  yen50           Int     @default(0)
-  yen10           Int     @default(0)
-  yen5            Int     @default(0)
-  yen1            Int     @default(0)
-  total           BigInt  @default(0) // 合計金額
+  yen10000     Int     @default(0)
+  yen5000      Int     @default(0)
+  yen2000      Int     @default(0)
+  yen1000      Int     @default(0)
+  yen500       Int     @default(0)
+  yen100       Int     @default(0)
+  yen50        Int     @default(0)
+  yen10        Int     @default(0)
+  yen5         Int     @default(0)
+  yen1         Int     @default(0)
+  total        BigInt  @default(0) // 合計金額
   // 用途明細ごとに持てる
-  purposeLabel    String? // 用途ラベル
+  purposeLabel String? // 用途ラベル
 
-  batch           CashWithdrawalBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch CashWithdrawalBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
-  @@schema("fina")
   @@map("cash_denominations_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -805,40 +1009,40 @@ model CashDenomination {
 // ============================================================
 
 model RecurringTemplate {
-  id              String  @id @default(cuid())
-  companyId       String
-  name            String  // テンプレート名
+  id             String @id @default(cuid())
+  companyId      String
+  name           String // テンプレート名
   // 生成設定
-  frequency       String  // "MONTHLY","BIMONTHLY_ODD","BIMONTHLY_EVEN","QUARTERLY","YEARLY","SPECIFIC_MONTHS"
-  specificMonths  Int[]   // 特定月指定の場合
-  startMonth      Int?    // 任意開始月
-  dueDayRule      String  // "MONTH_END","DAY_15","DAY_25" etc.
-  holidayAdjust   String  @default("PREV_BUSINESS") // "PREV_BUSINESS","NEXT_BUSINESS","NONE"
+  frequency      String // "MONTHLY","BIMONTHLY_ODD","BIMONTHLY_EVEN","QUARTERLY","YEARLY","SPECIFIC_MONTHS"
+  specificMonths Int[] // 特定月指定の場合
+  startMonth     Int? // 任意開始月
+  dueDayRule     String // "MONTH_END","DAY_15","DAY_25" etc.
+  holidayAdjust  String @default("PREV_BUSINESS") // "PREV_BUSINESS","NEXT_BUSINESS","NONE"
 
   // テンプレート内容
-  transactionType TransactionType
-  accountId       String?
-  partnerId       String?
-  midId           String?
-  subId           String?
-  amountType      String  // "FIXED","VARIABLE","MANUAL"
-  fixedAmount     BigInt? // 固定金額
-  paymentMethod   PaymentMethod?
-  classification  String? // "FIXED","VARIABLE"
-  accountingMonthOffset Int @default(0) // 0=当月, -1=前月, 1=翌月
-  summary         String?
-  assigneeId      String? // 担当者ID
+  transactionType       TransactionType
+  accountId             String?
+  partnerId             String?
+  midId                 String?
+  subId                 String?
+  amountType            String // "FIXED","VARIABLE","MANUAL"
+  fixedAmount           BigInt? // 固定金額
+  paymentMethod         PaymentMethod?
+  classification        String? // "FIXED","VARIABLE"
+  accountingMonthOffset Int             @default(0) // 0=当月, -1=前月, 1=翌月
+  summary               String?
+  assigneeId            String? // 担当者ID
 
-  isActive        Boolean @default(true)
+  isActive           Boolean  @default(true)
   lastGeneratedMonth String? // 最後に生成した月 "YYYY-MM"
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  company         Company @relation(fields: [companyId], references: [id])
-  transactions    Transaction[]
+  company      Company       @relation(fields: [companyId], references: [id])
+  transactions Transaction[]
 
-  @@schema("fina")
   @@map("recurring_templates_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -846,61 +1050,61 @@ model RecurringTemplate {
 // ============================================================
 
 model LoanContract {
-  id              String  @id @default(cuid())
-  companyId       String
-  partnerId       String? // 借入先（取引先マスタ）
-  contractName    String
-  principalAmount BigInt  // 借入金額
-  executionDate   DateTime // 実行日
-  repaymentStartDate DateTime // 返済開始日
+  id                     String    @id @default(cuid())
+  companyId              String
+  partnerId              String? // 借入先（取引先マスタ）
+  contractName           String
+  principalAmount        BigInt // 借入金額
+  executionDate          DateTime // 実行日
+  repaymentStartDate     DateTime // 返済開始日
   // 返済条件
-  repaymentMethod String  // "EQUAL_PRINCIPAL","GRACE","BULLET","QUARTERLY","SEMIANNUAL","BOND"
-  repaymentFrequency String // "MONTHLY","QUARTERLY","SEMIANNUAL","ANNUAL"
-  repaymentDay    Int?    // 返済日（25,27等）
-  holidayAdjust   String  @default("PREV_BUSINESS")
-  totalPayments   Int?    // 返済回数
-  completionDate  DateTime? // 完済予定日
+  repaymentMethod        String // "EQUAL_PRINCIPAL","GRACE","BULLET","QUARTERLY","SEMIANNUAL","BOND"
+  repaymentFrequency     String // "MONTHLY","QUARTERLY","SEMIANNUAL","ANNUAL"
+  repaymentDay           Int? // 返済日（25,27等）
+  holidayAdjust          String    @default("PREV_BUSINESS")
+  totalPayments          Int? // 返済回数
+  completionDate         DateTime? // 完済予定日
   // 金利
-  interestType    String  // "FIXED","VARIABLE"
-  interestRate    Decimal // 金利（%）
-  interestTiming  String  @default("ARREAR") // "ADVANCE","ARREAR"（前払/後払）
-  dayCountBasis   Int     @default(365) // 日割基準（365/360）
-  roundingRule    String  @default("ROUND_HALF_UP") // 端数処理
-  principalAdjust String  @default("LAST") // 端数調整 "FIRST","LAST"
+  interestType           String // "FIXED","VARIABLE"
+  interestRate           Decimal // 金利（%）
+  interestTiming         String    @default("ARREAR") // "ADVANCE","ARREAR"（前払/後払）
+  dayCountBasis          Int       @default(365) // 日割基準（365/360）
+  roundingRule           String    @default("ROUND_HALF_UP") // 端数処理
+  principalAdjust        String    @default("LAST") // 端数調整 "FIRST","LAST"
   // 金利変更履歴
-  interestHistory Json?   // [{effectiveDate, rate}]
-  remainingBalance BigInt @default(0) // 残高
-  status          String  @default("ACTIVE") // "ACTIVE","COMPLETED","CANCELLED"
+  interestHistory        Json? // [{effectiveDate, rate}]
+  remainingBalance       BigInt    @default(0) // 残高
+  status                 String    @default("ACTIVE") // "ACTIVE","COMPLETED","CANCELLED"
   // PDF P8: 保証協会有無フラグ
-  isGuaranteeAssociation Boolean @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  isGuaranteeAssociation Boolean   @default(false)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  company         Company @relation(fields: [companyId], references: [id])
-  schedules       LoanSchedule[]
+  company   Company        @relation(fields: [companyId], references: [id])
+  schedules LoanSchedule[]
 
-  @@schema("fina")
   @@map("loan_contracts_fina")
+  @@schema("fina")
 }
 
 // 返済スケジュール
 model LoanSchedule {
-  id              String  @id @default(cuid())
-  contractId      String
-  paymentNumber   Int     // 回数
-  dueDate         DateTime // 返済日
-  principalAmount BigInt  // 元金
-  interestAmount  BigInt  // 利息
-  totalAmount     BigInt  // 合計
+  id               String   @id @default(cuid())
+  contractId       String
+  paymentNumber    Int // 回数
+  dueDate          DateTime // 返済日
+  principalAmount  BigInt // 元金
+  interestAmount   BigInt // 利息
+  totalAmount      BigInt // 合計
   remainingBalance BigInt // 残高
-  isPaid          Boolean @default(false)
-  transactionId   String? // 紐づく取引ID
+  isPaid           Boolean  @default(false)
+  transactionId    String? // 紐づく取引ID
 
-  contract        LoanContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contract LoanContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   @@index([contractId])
-  @@schema("fina")
   @@map("loan_schedules_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -908,49 +1112,49 @@ model LoanSchedule {
 // ============================================================
 
 model LeaseContract {
-  id              String  @id @default(cuid())
+  id              String    @id @default(cuid())
   companyId       String
   partnerId       String?
   contractName    String
-  monthlyAmount   BigInt  // 月額
+  monthlyAmount   BigInt // 月額
   startDate       DateTime
   endDate         DateTime?
-  totalPayments   Int?    // 回数
-  paymentDay      Int?    // 支払日
-  holidayAdjust   String  @default("PREV_BUSINESS")
-  principalAdjust String  @default("LAST") // 端数調整
+  totalPayments   Int? // 回数
+  paymentDay      Int? // 支払日
+  holidayAdjust   String    @default("PREV_BUSINESS")
+  principalAdjust String    @default("LAST") // 端数調整
   accountId       String? // 支払口座
   midId           String? // 中項目
   subId           String? // 小項目
-  status          String  @default("ACTIVE")
+  status          String    @default("ACTIVE")
   // PDF P9: 車種分類（代表/車/その他）
-  assetCategory   String  @default("OTHER") // "REPRESENTATIVE","VEHICLE","OTHER"
+  assetCategory   String    @default("OTHER") // "REPRESENTATIVE","VEHICLE","OTHER"
   vehicleModel    String? // 車種（VEHICLE時のみ）
   vehicleNumber   String? // 車両番号
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  company         Company @relation(fields: [companyId], references: [id])
-  schedules       LeaseSchedule[]
+  company   Company         @relation(fields: [companyId], references: [id])
+  schedules LeaseSchedule[]
 
-  @@schema("fina")
   @@map("lease_contracts_fina")
+  @@schema("fina")
 }
 
 model LeaseSchedule {
-  id              String  @id @default(cuid())
-  contractId      String
-  paymentNumber   Int
-  dueDate         DateTime
-  amount          BigInt
-  isPaid          Boolean @default(false)
-  transactionId   String?
+  id            String   @id @default(cuid())
+  contractId    String
+  paymentNumber Int
+  dueDate       DateTime
+  amount        BigInt
+  isPaid        Boolean  @default(false)
+  transactionId String?
 
-  contract        LeaseContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contract LeaseContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   @@index([contractId])
-  @@schema("fina")
   @@map("lease_schedules_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -958,21 +1162,21 @@ model LeaseSchedule {
 // ============================================================
 
 model MonthClose {
-  id              String  @id @default(cuid())
-  companyId       String
-  yearMonth       String  // "YYYY-MM"
-  isClosed        Boolean @default(false)
-  closedAt        DateTime?
-  closedBy        String?
-  reopenedAt      DateTime?
-  reopenedBy      String?
-  reopenReason    String? // 解除理由（必須）
+  id           String    @id @default(cuid())
+  companyId    String
+  yearMonth    String // "YYYY-MM"
+  isClosed     Boolean   @default(false)
+  closedAt     DateTime?
+  closedBy     String?
+  reopenedAt   DateTime?
+  reopenedBy   String?
+  reopenReason String? // 解除理由（必須）
 
-  company         Company @relation(fields: [companyId], references: [id])
+  company Company @relation(fields: [companyId], references: [id])
 
   @@unique([companyId, yearMonth])
-  @@schema("fina")
   @@map("month_closes_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -980,45 +1184,45 @@ model MonthClose {
 // ============================================================
 
 model TransferBatch {
-  id              String  @id @default(cuid())
-  companyId       String
-  accountId       String  // 出金口座
-  batchDate       DateTime
-  purpose         String  // "GENERAL","SALARY","BONUS"
-  status          String  @default("DRAFT") // "DRAFT","CONFIRMED","FB_EXPORTED","TRANSFERRED"
-  fbExportedAt    DateTime?
-  confirmedAt     DateTime?
-  confirmedBy     String?
-  totalAmount     BigInt  @default(0)
-  totalFee        BigInt  @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           String    @id @default(cuid())
+  companyId    String
+  accountId    String // 出金口座
+  batchDate    DateTime
+  purpose      String // "GENERAL","SALARY","BONUS"
+  status       String    @default("DRAFT") // "DRAFT","CONFIRMED","FB_EXPORTED","TRANSFERRED"
+  fbExportedAt DateTime?
+  confirmedAt  DateTime?
+  confirmedBy  String?
+  totalAmount  BigInt    @default(0)
+  totalFee     BigInt    @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  items           TransferBatchItem[]
+  items TransferBatchItem[]
 
-  @@schema("fina")
   @@map("transfer_batches_fina")
+  @@schema("fina")
 }
 
 model TransferBatchItem {
-  id              String  @id @default(cuid())
-  batchId         String
-  transactionId   String? // 紐づく取引
-  recipientName   String  // 受取人名
-  bankCode        String
-  branchCode      String
-  accountType     String
-  accountNumber   String
-  amount          BigInt
-  fee             BigInt  @default(0) // 手数料
-  feeOverride     Boolean @default(false) // 手数料手動上書き
-  isTransferred   Boolean @default(false) // 振込済フラグ
-  displayOrder    Int     @default(0)
+  id            String  @id @default(cuid())
+  batchId       String
+  transactionId String? // 紐づく取引
+  recipientName String // 受取人名
+  bankCode      String
+  branchCode    String
+  accountType   String
+  accountNumber String
+  amount        BigInt
+  fee           BigInt  @default(0) // 手数料
+  feeOverride   Boolean @default(false) // 手数料手動上書き
+  isTransferred Boolean @default(false) // 振込済フラグ
+  displayOrder  Int     @default(0)
 
-  batch           TransferBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch TransferBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
-  @@schema("fina")
   @@map("transfer_batch_items_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1026,17 +1230,17 @@ model TransferBatchItem {
 // ============================================================
 
 model SalaryJournalMapping {
-  id              String  @id @default(cuid())
+  id                String  @id @default(cuid())
   deductionItemName String // 控除項目名（家賃控除, 通信費控除, etc.）
-  majorId         String  // 大項目
-  midId           String  // 中項目
-  subId           String? // 小項目
-  classification  String? // 区分（固定/変動/定期）
-  isActive        Boolean @default(true)
+  majorId           String // 大項目
+  midId             String // 中項目
+  subId             String? // 小項目
+  classification    String? // 区分（固定/変動/定期）
+  isActive          Boolean @default(true)
 
   @@unique([deductionItemName])
-  @@schema("fina")
   @@map("salary_journal_mappings_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1044,22 +1248,22 @@ model SalaryJournalMapping {
 // ============================================================
 
 model TemporaryBankAccount {
-  id              String   @id @default(cuid())
-  transactionId   String   @unique           // 1取引に1仮口座
-  bankCode        String                     // 銀行コード
-  bankName        String?                    // 銀行名（表示用）
-  branchCode      String                     // 支店コード
-  branchName      String?                    // 支店名（表示用）
-  accountType     String                     // "ORDINARY","CURRENT"
-  accountNumber   String                     // 口座番号
-  accountHolder   String                     // 名義カナ（半角）
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id            String   @id @default(cuid())
+  transactionId String   @unique // 1取引に1仮口座
+  bankCode      String // 銀行コード
+  bankName      String? // 銀行名（表示用）
+  branchCode    String // 支店コード
+  branchName    String? // 支店名（表示用）
+  accountType   String // "ORDINARY","CURRENT"
+  accountNumber String // 口座番号
+  accountHolder String // 名義カナ（半角）
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  transaction     Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 
-  @@schema("fina")
   @@map("temporary_bank_accounts_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1067,21 +1271,21 @@ model TemporaryBankAccount {
 // ============================================================
 
 model AuditLog {
-  id              String  @id @default(cuid())
-  tableName       String  // 対象テーブル名
-  recordId        String  // 対象レコードID
-  operation       String  // "CREATE","UPDATE","DELETE","CONFIRM","UNCONFIRM","MONTH_CLOSE","MONTH_REOPEN"
-  userId          String  // 操作ユーザーID
-  timestamp       DateTime @default(now())
-  beforeData      Json?   // 変更前の値
-  afterData       Json?   // 変更後の値
-  reason          String? // 変更理由（月締め解除時は必須）
+  id         String   @id @default(cuid())
+  tableName  String // 対象テーブル名
+  recordId   String // 対象レコードID
+  operation  String // "CREATE","UPDATE","DELETE","CONFIRM","UNCONFIRM","MONTH_CLOSE","MONTH_REOPEN"
+  userId     String // 操作ユーザーID
+  timestamp  DateTime @default(now())
+  beforeData Json? // 変更前の値
+  afterData  Json? // 変更後の値
+  reason     String? // 変更理由（月締め解除時は必須）
 
   @@index([tableName, recordId])
   @@index([userId, timestamp])
   @@index([timestamp])
-  @@schema("fina")
   @@map("audit_logs_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1089,31 +1293,31 @@ model AuditLog {
 // ============================================================
 
 model BankMaster {
-  id          String  @id @default(cuid())
-  bankCode    String  @unique
-  bankName    String
+  id           String  @id @default(cuid())
+  bankCode     String  @unique
+  bankName     String
   bankNameKana String?
-  isActive    Boolean @default(true)
+  isActive     Boolean @default(true)
 
-  branches    BranchMaster[]
+  branches BranchMaster[]
 
-  @@schema("fina")
   @@map("bank_masters_fina")
+  @@schema("fina")
 }
 
 model BranchMaster {
-  id          String  @id @default(cuid())
-  bankCode    String
-  branchCode  String
-  branchName  String
+  id             String  @id @default(cuid())
+  bankCode       String
+  branchCode     String
+  branchName     String
   branchNameKana String?
-  isActive    Boolean @default(true)
+  isActive       Boolean @default(true)
 
-  bank        BankMaster @relation(fields: [bankCode], references: [bankCode])
+  bank BankMaster @relation(fields: [bankCode], references: [bankCode])
 
   @@unique([bankCode, branchCode])
-  @@schema("fina")
   @@map("branch_masters_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1124,18 +1328,18 @@ model ReconciliationCheckpoint {
   companyId       String
   accountId       String
   checkpointDate  DateTime
-  yearMonth       String   // "YYYY-MM"
+  yearMonth       String // "YYYY-MM"
   verifiedBalance BigInt
   verifiedBy      String
   verifiedAt      DateTime @default(now())
   note            String?
 
-  company         Company  @relation(fields: [companyId], references: [id])
-  account         Account  @relation(fields: [accountId], references: [id])
+  company Company @relation(fields: [companyId], references: [id])
+  account Account @relation(fields: [accountId], references: [id])
 
   @@unique([accountId, yearMonth, checkpointDate])
-  @@schema("fina")
   @@map("reconciliation_checkpoints_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1145,28 +1349,28 @@ model ReconciliationCheckpoint {
 // ============================================================
 
 model TaxPaymentSchedule {
-  id                  String   @id @default(cuid())
-  companyId           String
-  taxType             String   // "CORPORATE","CONSUMPTION","RESIDENT","BUSINESS","FIXED_ASSET","OTHER"
-  fiscalYear          Int      // 対象事業年度（例: 2025）
-  periodLabel         String   // "確定","中間1","中間2","中間3","中間4"
-  dueDate             DateTime // 納付期限
-  scheduledAmount     BigInt   @default(0) // 予定額
-  actualAmount        BigInt?  // 実納付額
-  basisAmount         BigInt?  // 算定基礎額（前年確定額）
-  calculationMethod   String?  // "FIXED_ANNUAL","INTERIM_HALF","INTERIM_QUARTERLY","INTERIM_MONTHLY","MANUAL"
-  isPaid              Boolean  @default(false)
-  paidDate            DateTime?
-  transactionId       String?  // 紐づく取引ID
-  accountId           String?  // 引落口座
-  notes               String?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                String    @id @default(cuid())
+  companyId         String
+  taxType           String // "CORPORATE","CONSUMPTION","RESIDENT","BUSINESS","FIXED_ASSET","OTHER"
+  fiscalYear        Int // 対象事業年度（例: 2025）
+  periodLabel       String // "確定","中間1","中間2","中間3","中間4"
+  dueDate           DateTime // 納付期限
+  scheduledAmount   BigInt    @default(0) // 予定額
+  actualAmount      BigInt? // 実納付額
+  basisAmount       BigInt? // 算定基礎額（前年確定額）
+  calculationMethod String? // "FIXED_ANNUAL","INTERIM_HALF","INTERIM_QUARTERLY","INTERIM_MONTHLY","MANUAL"
+  isPaid            Boolean   @default(false)
+  paidDate          DateTime?
+  transactionId     String? // 紐づく取引ID
+  accountId         String? // 引落口座
+  notes             String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([companyId, fiscalYear, taxType])
   @@index([dueDate])
-  @@schema("fina")
   @@map("tax_payment_schedules_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1174,51 +1378,51 @@ model TaxPaymentSchedule {
 // ============================================================
 
 model CreditCard {
-  id              String   @id @default(cuid())
-  companyId       String
-  cardName        String   // カード名（例: 法人VISA, 楽天カード）
-  cardBrand       String?  // "VISA","JCB","MASTER","AMEX","DINERS"
-  cardLast4       String?  // 末尾4桁
-  holderName      String?  // 名義人
+  id               String   @id @default(cuid())
+  companyId        String
+  cardName         String // カード名（例: 法人VISA, 楽天カード）
+  cardBrand        String? // "VISA","JCB","MASTER","AMEX","DINERS"
+  cardLast4        String? // 末尾4桁
+  holderName       String? // 名義人
   paymentAccountId String? // 引落口座
-  closingDay      Int?     // 締日
-  paymentDay      Int?     // 支払日
-  isActive        Boolean  @default(true)
-  notes           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  closingDay       Int? // 締日
+  paymentDay       Int? // 支払日
+  isActive         Boolean  @default(true)
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  statements      CardStatement[]
+  statements CardStatement[]
 
-  @@schema("fina")
   @@map("credit_cards_fina")
+  @@schema("fina")
 }
 
 model CardStatement {
-  id              String   @id @default(cuid())
-  cardId          String
-  statementMonth  String   // "YYYY-MM"（引落月基準）
-  statementDate   DateTime // 利用日
-  storeName       String   // 利用店名
-  amount          BigInt   // 利用金額（円）
-  category        String?  // 任意のカテゴリ（交際費/消耗品 等）
-  midId           String?  // 勘定科目（中項目）
-  subId           String?  // 補助科目（小項目）
-  partnerId       String?  // 取引先
-  summary         String?  // 摘要
-  isPosted        Boolean  @default(false) // 取引登録済みフラグ
-  transactionId   String?  // 紐づく Transaction.id
-  importBatchId   String?  // 取込バッチID
-  rowHash         String?  // 重複排除用ハッシュ
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String   @id @default(cuid())
+  cardId         String
+  statementMonth String // "YYYY-MM"（引落月基準）
+  statementDate  DateTime // 利用日
+  storeName      String // 利用店名
+  amount         BigInt // 利用金額（円）
+  category       String? // 任意のカテゴリ（交際費/消耗品 等）
+  midId          String? // 勘定科目（中項目）
+  subId          String? // 補助科目（小項目）
+  partnerId      String? // 取引先
+  summary        String? // 摘要
+  isPosted       Boolean  @default(false) // 取引登録済みフラグ
+  transactionId  String? // 紐づく Transaction.id
+  importBatchId  String? // 取込バッチID
+  rowHash        String? // 重複排除用ハッシュ
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  card            CreditCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  card CreditCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
 
   @@index([cardId, statementMonth])
   @@index([rowHash])
-  @@schema("fina")
   @@map("card_statements_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1226,24 +1430,24 @@ model CardStatement {
 // ============================================================
 
 model ImportBatch {
-  id              String   @id @default(cuid())
-  companyId       String
-  batchType       String   // "SALES","COST","CARD","SALARY"
-  sourceName      String?  // ファイル名
-  sourceFormat    String?  // "EXCEL","CSV","DX_API"
-  yearMonth       String?  // 対象月
-  importedBy      String?  // ユーザーID
-  totalRows       Int      @default(0)
-  appliedRows     Int      @default(0)
-  skippedRows     Int      @default(0)
-  status          String   @default("DRAFT") // "DRAFT","APPLIED","CANCELLED"
-  notes           String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           String   @id @default(cuid())
+  companyId    String
+  batchType    String // "SALES","COST","CARD","SALARY"
+  sourceName   String? // ファイル名
+  sourceFormat String? // "EXCEL","CSV","DX_API"
+  yearMonth    String? // 対象月
+  importedBy   String? // ユーザーID
+  totalRows    Int      @default(0)
+  appliedRows  Int      @default(0)
+  skippedRows  Int      @default(0)
+  status       String   @default("DRAFT") // "DRAFT","APPLIED","CANCELLED"
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([companyId, batchType, yearMonth])
-  @@schema("fina")
   @@map("import_batches_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1251,37 +1455,37 @@ model ImportBatch {
 // ============================================================
 
 model CompanyGroup {
-  id              String   @id @default(cuid())
-  name            String   @unique // 例: "Aグループ","エグループ"
-  shortName       String?  // 略称
-  description     String?
-  colorCode       String?  // タイル背景色（#RRGGBB）
-  displayOrder    Int      @default(0)
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id           String   @id @default(cuid())
+  name         String   @unique // 例: "Aグループ","エグループ"
+  shortName    String? // 略称
+  description  String?
+  colorCode    String? // タイル背景色（#RRGGBB）
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  members         CompanyGroupMember[]
+  members CompanyGroupMember[]
 
-  @@schema("fina")
   @@map("company_groups_fina")
+  @@schema("fina")
 }
 
 // 1社が複数グループに所属可能（例: A工業がAグループにも全社サマリにも入る）
 model CompanyGroupMember {
-  id              String   @id @default(cuid())
-  groupId         String
-  companyId       String
-  role            String   @default("MEMBER") // "PARENT","MEMBER"
-  displayOrder    Int      @default(0)
-  createdAt       DateTime @default(now())
+  id           String   @id @default(cuid())
+  groupId      String
+  companyId    String
+  role         String   @default("MEMBER") // "PARENT","MEMBER"
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now())
 
-  group           CompanyGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group CompanyGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@unique([groupId, companyId])
   @@index([companyId])
-  @@schema("fina")
   @@map("company_group_members_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1297,51 +1501,51 @@ model CompanyGroupMember {
 
 model JournalEntry {
   id              String   @id @default(cuid())
-  voucherNo       Int      // 伝票No (xlsx 列1)
-  identifierFlag  Int      // 識別フラグ 2000/2100/2101/2110/2111 (xlsx 列0)
+  voucherNo       Int // 伝票No (xlsx 列1)
+  identifierFlag  Int // 識別フラグ 2000/2100/2101/2110/2111 (xlsx 列0)
   transactionDate DateTime // 取引日付
 
   // 借方
-  drAccountKind   String?  // 借方勘定科目
-  drSubAccount    String?  // 借方補助科目
-  drCompanyId     String?  // Company FK (借方部門の会社)
-  drCompanyName   String?  // 借方部門 (会社名 raw text)
-  drTaxClass      String?  // 借方税区分
-  drAmount        BigInt   @default(0)
-  drTaxAmount     BigInt   @default(0)
+  drAccountKind String? // 借方勘定科目
+  drSubAccount  String? // 借方補助科目
+  drCompanyId   String? // Company FK (借方部門の会社)
+  drCompanyName String? // 借方部門 (会社名 raw text)
+  drTaxClass    String? // 借方税区分
+  drAmount      BigInt  @default(0)
+  drTaxAmount   BigInt  @default(0)
 
   // 貸方
-  crAccountKind   String?  // 貸方勘定科目
-  crSubAccount    String?  // 貸方補助科目
-  crCompanyId     String?  // Company FK (貸方部門の会社)
-  crCompanyName   String?  // 貸方部門
-  crTaxClass      String?  // 貸方税区分
-  crAmount        BigInt   @default(0)
-  crTaxAmount     BigInt   @default(0)
+  crAccountKind String? // 貸方勘定科目
+  crSubAccount  String? // 貸方補助科目
+  crCompanyId   String? // Company FK (貸方部門の会社)
+  crCompanyName String? // 貸方部門
+  crTaxClass    String? // 貸方税区分
+  crAmount      BigInt  @default(0)
+  crTaxAmount   BigInt  @default(0)
 
-  summary         String?  // 摘要 (xlsx 列16)
+  summary        String? // 摘要 (xlsx 列16)
   // メタ（xlsx 列17以降）
-  refNumber       String?  // 番号
-  voucherDueDate  DateTime? // 期日
-  voucherType     Int?     // タイプ
-  source          String?  // 生成元
-  memo            String?  // 仕訳メモ
-  tag1            Int?     // 付箋1
-  tag2            Int?     // 付箋2
-  adjustment      String?  // 調整
+  refNumber      String? // 番号
+  voucherDueDate DateTime? // 期日
+  voucherType    Int? // タイプ
+  source         String? // 生成元
+  memo           String? // 仕訳メモ
+  tag1           Int? // 付箋1
+  tag2           Int? // 付箋2
+  adjustment     String? // 調整
 
-  createdAt       DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  drCompany       Company? @relation("JournalEntryDrCompany", fields: [drCompanyId], references: [id])
-  crCompany       Company? @relation("JournalEntryCrCompany", fields: [crCompanyId], references: [id])
+  drCompany Company? @relation("JournalEntryDrCompany", fields: [drCompanyId], references: [id])
+  crCompany Company? @relation("JournalEntryCrCompany", fields: [crCompanyId], references: [id])
 
   @@index([voucherNo])
   @@index([transactionDate])
   @@index([drCompanyId])
   @@index([crCompanyId])
   @@index([identifierFlag])
-  @@schema("fina")
   @@map("journal_entries_fina")
+  @@schema("fina")
 }
 
 // ============================================================
@@ -1350,44 +1554,44 @@ model JournalEntry {
 // ============================================================
 
 model FinancialReport {
-  id              String   @id @default(cuid())
-  companyId       String?  // 単一会社レポート。鳶/広告/全体合計の場合は null
-  reportType      String   // "TRIAL_BALANCE","INCOME_STATEMENT","BALANCE_SHEET","MANUFACTURING_COST"
-  scope           String   @default("SINGLE") // "SINGLE","INDUSTRY_TOTAL","ALL_TOTAL"
-  scopeLabel      String?  // "鳶 合計","広告 合計","全体 合計"
-  yearMonth       String   // "YYYY-MM"（月別データ）
-  fiscalYear      Int?     // 年間推移シート由来の場合の事業年度
-  accountName     String   // 勘定科目名（例: 売上高, [製]外注費）
-  section         String?  // [売上高] [売上原価] [販売管理費] etc.
-  amount          BigInt   // 金額（円、符号付き）
-  displayOrder    Int      @default(0)
-  isSubtotal      Boolean  @default(false) // 「売上高合計」「販売管理費計」など
-  isSection       Boolean  @default(false) // セクション見出し行
-  notes           String?
-  createdAt       DateTime @default(now())
+  id           String   @id @default(cuid())
+  companyId    String? // 単一会社レポート。鳶/広告/全体合計の場合は null
+  reportType   String // "TRIAL_BALANCE","INCOME_STATEMENT","BALANCE_SHEET","MANUFACTURING_COST"
+  scope        String   @default("SINGLE") // "SINGLE","INDUSTRY_TOTAL","ALL_TOTAL"
+  scopeLabel   String? // "鳶 合計","広告 合計","全体 合計"
+  yearMonth    String // "YYYY-MM"（月別データ）
+  fiscalYear   Int? // 年間推移シート由来の場合の事業年度
+  accountName  String // 勘定科目名（例: 売上高, [製]外注費）
+  section      String? // [売上高] [売上原価] [販売管理費] etc.
+  amount       BigInt // 金額（円、符号付き）
+  displayOrder Int      @default(0)
+  isSubtotal   Boolean  @default(false) // 「売上高合計」「販売管理費計」など
+  isSection    Boolean  @default(false) // セクション見出し行
+  notes        String?
+  createdAt    DateTime @default(now())
 
-  company         Company? @relation(fields: [companyId], references: [id])
+  company Company? @relation(fields: [companyId], references: [id])
 
   @@index([companyId, reportType, yearMonth])
   @@index([reportType, scope, yearMonth])
-  @@schema("fina")
   @@map("financial_reports_fina")
+  @@schema("fina")
 }
 
 model SalesItemMaster {
-  id              String   @id @default(cuid())
-  name            String   // 売上項目名（例: 工事売上、地代収入、雑収入）
-  shortName       String?
-  description     String?
+  id                    String   @id @default(cuid())
+  name                  String // 売上項目名（例: 工事売上、地代収入、雑収入）
+  shortName             String?
+  description           String?
   // 対象会社IDのカンマ区切り（空=全社対象）
-  applicableCompanyIds String?
+  applicableCompanyIds  String?
   // デフォルト分類
   defaultClassification String? // "FIXED","VARIABLE","TEMPORARY"
-  displayOrder    Int      @default(0)
-  isActive        Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  displayOrder          Int      @default(0)
+  isActive              Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
-  @@schema("fina")
   @@map("sales_item_masters_fina")
+  @@schema("fina")
 }

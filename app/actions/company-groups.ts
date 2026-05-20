@@ -1,16 +1,12 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
-import { requireSession } from "@/lib/auth-server"
+import { requireSession, requireCompanyAdmin } from "@/lib/auth-server"
 import { revalidatePath } from "next/cache"
-import { getCurrentUserProfile } from "@/app/actions/user-profile"
 
+// 会社グループの編集は SUPER_ADMIN または COMPANY_ADMIN のみ
 async function requireAdmin() {
-  await requireSession()
-  const profile = await getCurrentUserProfile()
-  if (profile?.role !== "ADMIN") {
-    throw new Error("会社グループの編集は管理者のみ実行できます")
-  }
+  await requireCompanyAdmin()
 }
 
 export async function getCompanyGroups() {
